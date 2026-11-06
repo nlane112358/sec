@@ -60,30 +60,60 @@ Show annual metrics for a company:
 ```
 
 The summary includes revenue, operating income, net income, operating cash
-flow, capital expenditure, free cash flow, cash, borrowings, and shares. Free
-cash flow is operating cash flow minus capital expenditure. Shares use
-period-end outstanding shares when available and otherwise diluted
-weighted-average shares.
+flow, capital expenditure, depreciation and amortization, free cash flow, cash,
+borrowings, and shares. Free cash flow is operating cash flow minus capital
+expenditure. Shares use period-end outstanding shares when available and
+otherwise diluted weighted-average shares.
 
-Run a two-stage DCF using the latest annual free cash flow, cash, debt, and
-shares in the shared database:
+Run a two-stage DCF using annual SEC facts:
 
 ```sh
 ./sec dcf AAPL
 ./sec dcf AAPL --growth 8 --discount 9 --terminal 2.5 --years 5
+./sec dcf GOOGL --mode revenue --growth 9 --beta 1.1 --market-cap 2.5e12
+./sec dcf META --mode revenue --capex-mode normalized
 ```
 
-Rates are entered as percentages. If `--growth` is omitted, the model uses the
-three-year historical FCF CAGR when four consecutive annual periods with
-positive FCF are available. Otherwise it reports that a growth assumption is
-required. The command prints projected cash flows, the EV-to-equity bridge, a
-per-share estimate, and a sensitivity table using nearby discount and terminal
-growth rates. It requires positive latest annual FCF and same-currency cash and
-debt facts. The model uses SEC-reported diluted weighted-average shares when
-period-end shares are unavailable; it does not fetch a market price. The
-cash-flow input is operating cash flow minus CapEx, a useful FCF proxy but not a
-complete unlevered FCFF calculation, so interpret the EV-to-equity bridge with
-that limitation in mind.
+Rates are entered as percentages. `--mode fcf` (the default) grows operating
+cash flow less CapEx. Its default growth assumption is the three-year
+historical FCF CAGR when four consecutive annual periods with positive FCF are
+available. With raw CapEx, the model estimates the growth CapEx wedge as CapEx
+above D&A and fades that wedge linearly to zero by the final forecast year.
+Choose `--capex-mode normalized` or `--normalize-capex` to use D&A as the
+CapEx/maintenance-reinvestment proxy throughout the forecast.
+
+`--mode revenue` builds FCFF from forecast revenue, a trailing historical
+operating margin, an effective tax rate, D&A, CapEx, and the change in net
+working capital. When `--growth` is omitted, this mode uses the three-year
+historical revenue CAGR when four consecutive annual periods are available.
+The working-capital input is current assets less current liabilities, which is
+an SEC-data proxy and can include cash and financing items.
+
+If `--discount` is omitted, the command estimates WACC from the risk-free rate,
+beta, equity risk premium, debt cost, tax rate, and capital weights. The
+defaults are a 4.84% risk-free rate (the [US 10-year Treasury yield on Nov. 5,
+2026](https://home.treasury.gov/resource-center/data-chart-center/interest-rates/TextView?field_tdr_date_value_month=202611&type=daily_treasury_yield_curve)),
+5.5% equity risk premium, 1.0 beta, 5.0% fallback cost of debt, and 21%
+fallback tax rate. The risk-free rate is a dated default; update it with
+`--risk-free` as market rates change, and use a rate that matches the company's
+reporting currency. Historical effective tax and interest
+expense divided by average debt are used when the corresponding CLI overrides
+are omitted. EDGAR does not report beta or market capitalization: provide
+`--beta` and optionally `--market-cap`; otherwise reported book equity is used
+as the equity-weight proxy. The debt weight uses reported net debt (borrowings
+less cash, floored at zero), while the DCF equity bridge separately adds cash
+and subtracts gross debt. Monetary assumptions such as `--market-cap` must use
+the company's reported currency units.
+
+The command prints projected cash flows, the EV-to-equity bridge, a per-share
+estimate, and a sensitivity table using nearby discount and terminal growth
+rates. Shares use period-end outstanding shares when available and otherwise
+diluted weighted-average shares. FCF mode uses operating cash flow less CapEx;
+that value is a useful FCF proxy, but it is not a complete unlevered FCFF
+calculation. Revenue mode provides a more explicit FCFF build, though its
+working-capital proxy has the limitation described above. Sync a company again
+to import newly added SEC concepts such as interest expense before relying on
+the historical cost-of-debt estimate.
 
 List the companies saved in the shared database:
 

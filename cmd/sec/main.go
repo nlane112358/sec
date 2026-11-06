@@ -203,13 +203,22 @@ func runSummary(parent context.Context, args []string, output, errorOutput io.Wr
 
 func runDCF(parent context.Context, args []string, output, errorOutput io.Writer) error {
 	flags := flag.NewFlagSet("dcf", flag.ContinueOnError)
-	setFlagUsage(flags, errorOutput, "usage: sec dcf TICKER [--growth PCT] [--discount PCT] [--terminal PCT] [--years N] [--data-dir DIR]")
-	growth := flags.Float64("growth", 0, "annual forecast growth in percent; default uses historical three-year FCF CAGR")
-	discount := flags.Float64("discount", 9, "discount rate in percent")
+	setFlagUsage(flags, errorOutput, "usage: sec dcf TICKER [--mode fcf|revenue] [--growth PCT] [--discount PCT] [--capex-mode raw|normalized] [--years N] [WACC options] [--data-dir DIR]")
+	mode := flags.String("mode", "fcf", "DCF model: fcf or revenue-driven FCFF")
+	growth := flags.Float64("growth", 0, "annual forecast growth in percent; defaults to historical three-year CAGR for the selected mode")
+	discount := flags.Float64("discount", 0, "manual discount rate in percent; defaults to calculated WACC")
 	terminal := flags.Float64("terminal", 2.5, "perpetual terminal growth in percent")
 	years := flags.Int("years", 5, "explicit forecast period in years (1-20)")
+	capexMode := flags.String("capex-mode", "raw", "CapEx forecast: raw with a terminal growth-CapEx fade, or normalized to D&A")
+	normalizeCapEx := flags.Bool("normalize-capex", false, "normalize CapEx to depreciation and amortization")
+	riskFree := flags.Float64("risk-free", 4.84, "risk-free rate in percent (default is the Nov. 5, 2026 US 10-year Treasury yield)")
+	equityRiskPremium := flags.Float64("erp", 5.5, "equity risk premium in percent")
+	beta := flags.Float64("beta", 1.0, "company beta; EDGAR does not provide beta")
+	costOfDebt := flags.Float64("cost-debt", 5.0, "fallback pre-tax cost of debt in percent; historical interest/debt is used when available")
+	taxRate := flags.Float64("tax", 21.0, "fallback tax rate in percent; historical effective tax rate is used by default")
+	marketCap := flags.Float64("market-cap", 0, "market capitalization in reported currency units; otherwise book equity is used for WACC weights")
 	dataDir := flags.String("data-dir", sqlite.DefaultDirectory(), "directory containing the shared SQLite database")
-	if err := parseCommandFlags(flags, args, "growth", "discount", "terminal", "years", "data-dir"); err != nil {
+	if err := parseCommandFlags(flags, args, "mode", "growth", "discount", "terminal", "years", "capex-mode", "normalize-capex", "risk-free", "erp", "beta", "cost-debt", "tax", "market-cap", "data-dir"); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
@@ -219,18 +228,57 @@ func runDCF(parent context.Context, args []string, output, errorOutput io.Writer
 	if err != nil {
 		return err
 	}
-	growthProvided := false
+	if *mode != string(sec.DCFModeFCF) && *mode != string(sec.DCFModeRevenue) {
+		return errors.New("--mode must be fcf or revenue")
+	}
+	if *capexMode != "raw" && *capexMode != "normalized" {
+		return errors.New("--capex-mode must be raw or normalized")
+	}
+	if *riskFree < 0 || *riskFree >= 100 || *equityRiskPremium < 0 || *equityRiskPremium >= 100 ||
+		*costOfDebt < 0 || *costOfDebt >= 100 || *taxRate < 0 || *taxRate >= 100 || *beta < 0 || *marketCap < 0 {
+		return errors.New("WACC rates must be between 0 and 100 percent, and beta and market capitalization must be non-negative")
+	}
+	growthProvided, discountProvided, taxProvided, costDebtProvided := false, false, false, false
 	flags.Visit(func(parsed *flag.Flag) {
-		if parsed.Name == "growth" {
+		switch parsed.Name {
+		case "growth":
 			growthProvided = true
+		case "discount":
+			discountProvided = true
+		case "tax":
+			taxProvided = true
+		case "cost-debt":
+			costDebtProvided = true
 		}
 	})
+	if discountProvided && *discount <= 0 {
+		return errors.New("--discount must be greater than 0 when provided")
+	}
+	if discountProvided && *discount >= 100 {
+		return errors.New("--discount must be less than 100 percent")
+	}
+	useNormalizedCapEx := *normalizeCapEx || *capexMode == "normalized"
+	waccConfig := &sec.WACCConfig{
+		RiskFreeRate:         *riskFree / 100,
+		EquityRiskPremium:    *equityRiskPremium / 100,
+		Beta:                 *beta,
+		CostOfDebt:           *costOfDebt / 100,
+		TaxRate:              *taxRate / 100,
+		MarketCap:            *marketCap,
+		UseEffectiveTaxRate:  !taxProvided,
+		UseEstimatedCostDebt: !costDebtProvided,
+	}
 	config := sec.DCFConfig{
+		Mode:                sec.DCFMode(*mode),
 		GrowthRate:          *growth / 100,
 		UseHistoricalGrowth: !growthProvided,
 		DiscountRate:        *discount / 100,
 		TerminalRate:        *terminal / 100,
 		Years:               *years,
+		NormalizeCapEx:      useNormalizedCapEx,
+		TaxRate:             *taxRate / 100,
+		UseEffectiveTaxRate: !taxProvided,
+		WACC:                waccConfig,
 	}
 	databasePath := sharedDatabasePath(*dataDir)
 	return withExistingStore(parent, databasePath, ticker, func(ctx context.Context, store *sec.Store) error {

@@ -100,6 +100,13 @@ var summaryMetricDefinitions = []summaryMetricDefinition{
 		},
 	},
 	{
+		name: "Depreciation & Amortization",
+		concepts: []summaryConcept{
+			{taxonomy: "us-gaap", concept: "DepreciationDepletionAndAmortization", duration: true},
+			{taxonomy: "ifrs-full", concept: "DepreciationAndAmortisationExpense", duration: true},
+		},
+	},
+	{
 		name:         "Free Cash Flow",
 		freeCashFlow: true,
 	},
@@ -111,7 +118,50 @@ var summaryMetricDefinitions = []summaryMetricDefinition{
 		},
 	},
 	{
+		name: "Current Assets",
+		concepts: []summaryConcept{
+			{taxonomy: "us-gaap", concept: "AssetsCurrent"},
+			{taxonomy: "ifrs-full", concept: "CurrentAssets"},
+		},
+	},
+	{
+		name: "Current Liabilities",
+		concepts: []summaryConcept{
+			{taxonomy: "us-gaap", concept: "LiabilitiesCurrent"},
+			{taxonomy: "ifrs-full", concept: "CurrentLiabilities"},
+		},
+	},
+	{
 		name: "Debt / Borrowings",
+	},
+	{
+		name: "Stockholders' Equity",
+		concepts: []summaryConcept{
+			{taxonomy: "us-gaap", concept: "StockholdersEquity"},
+			{taxonomy: "ifrs-full", concept: "Equity"},
+		},
+	},
+	{
+		name: "Income Tax Expense",
+		concepts: []summaryConcept{
+			{taxonomy: "us-gaap", concept: "IncomeTaxExpenseBenefit", duration: true},
+			{taxonomy: "ifrs-full", concept: "IncomeTaxExpenseContinuingOperations", duration: true},
+		},
+	},
+	{
+		name: "Income Before Tax",
+		concepts: []summaryConcept{
+			{taxonomy: "us-gaap", concept: "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest", duration: true},
+			{taxonomy: "ifrs-full", concept: "ProfitLossBeforeTax", duration: true},
+		},
+	},
+	{
+		name: "Interest Expense",
+		concepts: []summaryConcept{
+			{taxonomy: "us-gaap", concept: "InterestExpenseNonOperating", duration: true},
+			{taxonomy: "us-gaap", concept: "InterestAndDebtExpense", duration: true},
+			{taxonomy: "ifrs-full", concept: "FinanceCosts", duration: true},
+		},
 	},
 	{
 		name: "Shares Outstanding",
