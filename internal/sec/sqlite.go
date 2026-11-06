@@ -330,6 +330,30 @@ FROM sec_filings ORDER BY filing_date DESC, accession_number DESC`)
 	return filings, nil
 }
 
+func (s *Store) LoadFacts(ctx context.Context) ([]FinancialFact, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT company_name, cik, ticker, taxonomy, concept,
+    label, unit, value, period_start, period_end, filing_date, form, accession_number, frame
+FROM sec_facts ORDER BY period_end DESC, taxonomy, concept, filing_date DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("load SEC facts: %w", err)
+	}
+	defer rows.Close()
+	facts := make([]FinancialFact, 0)
+	for rows.Next() {
+		var fact FinancialFact
+		if err := rows.Scan(&fact.Company, &fact.CIK, &fact.Ticker, &fact.Taxonomy, &fact.Concept,
+			&fact.Label, &fact.Unit, &fact.Value, &fact.Start, &fact.End, &fact.FilingDate,
+			&fact.Form, &fact.Accession, &fact.Frame); err != nil {
+			return nil, fmt.Errorf("read SEC fact: %w", err)
+		}
+		facts = append(facts, fact)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read SEC facts: %w", err)
+	}
+	return facts, nil
+}
+
 func LoadFiling(ctx context.Context, path, accession string) (Filing, error) {
 	store, err := OpenStore(ctx, path)
 	if err != nil {

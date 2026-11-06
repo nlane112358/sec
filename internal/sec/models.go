@@ -138,6 +138,7 @@ func filingsFromHistory(cik string, h FilingHistory) []Filing {
 type FinancialFact struct {
 	Company    string  `json:"company"`
 	CIK        string  `json:"cik"`
+	Ticker     string  `json:"ticker"`
 	Taxonomy   string  `json:"taxonomy"`
 	Concept    string  `json:"concept"`
 	Label      string  `json:"label"`

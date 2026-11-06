@@ -1,7 +1,7 @@
 # SEC filing reader
 
-Fetch company facts and SEC filing details, then browse and read filings in
-the terminal.
+Fetch company facts and SEC filing details, then inspect saved financial data or
+browse filings in the terminal.
 
 ## Build
 
@@ -10,69 +10,67 @@ go build -o sec ./cmd/sec
 ```
 
 Set `SEC_USER_AGENT` to an identifying agent string with a contact email, or
-pass the same value with `-ua`.
+pass the same value with `--ua` when syncing data from SEC EDGAR.
 
-## Save a company
-
-```sh
-./sec -ticker AAPL
-```
-
-The command downloads company facts from the `us-gaap`, `ifrs-full`, and `dei`
-taxonomies, along with the company's complete filing history from SEC EDGAR.
-It creates a separate SQLite database for the company at
-`data/AAPL.db`. Choose another storage directory with `-data-dir` or
-`SEC_DATABASE_DIR`.
-Database files and SQLite sidecars are ignored by Git and remain local to your
-machine.
-
-The database schema is created automatically. The SQL definition is also
-available in [migrations/schema.sql](migrations/schema.sql).
-
-## Read filings in the terminal
+## Sync company data
 
 ```sh
-./sec -ticker AAPL -read
+./sec sync AAPL
 ```
 
-Choose a filing number to read its main document from SEC EDGAR. Use `n` and
-`p` to move through the filing list or document pages, `/text` to search, `g N`
-to jump to a document page, and `b` to return to the list. The reader converts
-the filing HTML to plain text and keeps the original filing in SEC EDGAR.
+The command downloads facts from the `us-gaap`, `ifrs-full`, and `dei`
+taxonomies, along with the company's full filing history, including amended
+filings. Progress is printed to stderr while SEC requests run. Pass another
+storage directory with `--data-dir` or set `SEC_DATABASE_DIR`.
 
-To refresh a company’s facts and filing list, run the save command again before
-opening the reader.
+Each company is saved in a separate SQLite database, such as
+`data/AAPL.db`. Database files and SQLite sidecars are ignored by Git and stay
+local to your machine.
 
-SEC's ticker mapping is cached for 24 hours under the operating system's user
-cache directory (or `SEC_CACHE_DIR` when set). Opened filing HTML is cached at
-`<data-dir>/documents/<accession>.html` and reused on later reads.
-
-## Inspect saved facts
+## Summary and exports
 
 Show key annual metrics for the five most recent fiscal years (or choose three
 or four):
 
 ```sh
-./sec -ticker AAPL -summary
-./sec -ticker AAPL -summary -years 3
+./sec summary AAPL
+./sec summary AAPL --years 3
 ```
 
-The summary reads the company's saved database and does not need a SEC
-User-Agent. Free cash flow is operating cash flow minus capital expenditure;
-the shares row uses period-end outstanding shares when available and otherwise
-diluted weighted-average shares.
+The summary reads saved data and does not need a SEC User-Agent. Free cash flow
+is operating cash flow minus capital expenditure; shares use period-end
+outstanding shares when available and otherwise diluted weighted-average
+shares.
 
-For raw facts, inspect the SQLite database directly:
+Export all saved facts as CSV or JSON. CSV is the default format:
 
 ```sh
-sqlite3 data/AAPL.db
+./sec export AAPL --format csv > AAPL-facts.csv
+./sec export AAPL --format json > AAPL-facts.json
 ```
 
-For example:
+List locally cached companies with:
 
-```sql
-SELECT taxonomy, concept, label, unit, value, period_start, period_end
-FROM sec_facts
-ORDER BY concept, period_end DESC
-LIMIT 8;
+```sh
+./sec list
 ```
+
+## Open filings in your browser
+
+```sh
+./sec read AAPL
+```
+
+Choose a filing number to open its official SEC document URL in your default
+browser. The browser loads the filing directly from SEC EDGAR; the CLI does not
+download or cache filing HTML. Use `n` and `p` to move through the filing list,
+`/text` to search, and `q` to quit.
+
+To refresh a company's facts and filing list, run `sec sync TICKER` before
+opening the reader. SEC's ticker mapping is cached for 24 hours under the
+operating system's user cache directory (or `SEC_CACHE_DIR` when set). The
+reader uses `open` on macOS, `xdg-open` on Linux, and the default URL handler on
+Windows.
+
+For raw queries, the SQLite schema is documented in
+[migrations/schema.sql](migrations/schema.sql).
