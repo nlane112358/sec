@@ -18,8 +18,9 @@ pass the same value with `-ua`.
 ./sec -ticker AAPL
 ```
 
-The command downloads company facts and recent filing submissions from SEC
-EDGAR. It creates a separate SQLite database for the company at
+The command downloads company facts from the `us-gaap`, `ifrs-full`, and `dei`
+taxonomies, along with the company's complete filing history from SEC EDGAR.
+It creates a separate SQLite database for the company at
 `data/AAPL.db`. Choose another storage directory with `-data-dir` or
 `SEC_DATABASE_DIR`.
 
@@ -40,6 +41,10 @@ the filing HTML to plain text and keeps the original filing in SEC EDGAR.
 To refresh a company’s facts and filing list, run the save command again before
 opening the reader.
 
+SEC's ticker mapping is cached for 24 hours under the operating system's user
+cache directory (or `SEC_CACHE_DIR` when set). Opened filing HTML is cached at
+`<data-dir>/documents/<accession>.html` and reused on later reads.
+
 ## Inspect saved facts
 
 ```sh
@@ -49,7 +54,7 @@ sqlite3 data/AAPL.db
 For example:
 
 ```sql
-SELECT concept, label, unit, value, period_start, period_end
+SELECT taxonomy, concept, label, unit, value, period_start, period_end
 FROM sec_facts
 ORDER BY concept, period_end DESC
 LIMIT 8;

@@ -69,18 +69,23 @@ func run() error {
 		return fmt.Errorf("fetch SEC company facts: %w", err)
 	}
 	facts := sec.ExtractFacts(factsData, cik)
-	filings := submissions.RecentFilings(cik)
+	filings := submissions.AllFilings(cik)
 	companyName := submissions.Name
 	if strings.TrimSpace(companyName) == "" {
 		companyName = factsData.Entity
 	}
-	if err := sec.SaveCompany(ctx, databasePath, cik, companyName, ticker); err != nil {
+	store, err := sec.OpenStore(ctx, databasePath)
+	if err != nil {
 		return err
 	}
-	if err := sec.SaveFacts(ctx, databasePath, ticker, facts); err != nil {
+	defer store.Close()
+	if err := store.SaveCompany(ctx, cik, companyName, ticker); err != nil {
 		return err
 	}
-	if err := sec.SaveFilings(ctx, databasePath, filings); err != nil {
+	if err := store.SaveFacts(ctx, ticker, facts); err != nil {
+		return err
+	}
+	if err := store.SaveFilings(ctx, filings); err != nil {
 		return err
 	}
 	fmt.Printf("saved_facts=%d saved_filings=%d ticker=%s cik=%s database=%s\n", len(facts), len(filings), ticker, cik, databasePath)

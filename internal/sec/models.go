@@ -30,11 +30,22 @@ type CompanyFacts struct {
 }
 
 type CompanySubmissions struct {
-	CIK     string `json:"cik"`
-	Name    string `json:"name"`
-	Filings struct {
-		Recent FilingHistory `json:"recent"`
-	} `json:"filings"`
+	CIK     string            `json:"cik"`
+	Name    string            `json:"name"`
+	Filings SubmissionFilings `json:"filings"`
+}
+
+type SubmissionFilings struct {
+	Recent       FilingHistory            `json:"recent"`
+	Files        []SupplementalFilingFile `json:"files"`
+	Supplemental []FilingHistory          `json:"-"`
+}
+
+type SupplementalFilingFile struct {
+	Name        string `json:"name"`
+	FilingFrom  string `json:"filingFrom"`
+	FilingTo    string `json:"filingTo"`
+	FilingCount int    `json:"filingCount"`
 }
 
 type FilingHistory struct {
@@ -60,7 +71,39 @@ func (s *CompanySubmissions) RecentFilings(cik string) []Filing {
 	if s == nil {
 		return nil
 	}
-	h := s.Filings.Recent
+	return filingsFromHistory(cik, s.Filings.Recent)
+}
+
+// AllFilings returns the recent filing history and any supplementary history
+// files fetched by Client.Submissions.
+func (s *CompanySubmissions) AllFilings(cik string) []Filing {
+	if s == nil {
+		return nil
+	}
+	histories := make([]FilingHistory, 0, 1+len(s.Filings.Supplemental))
+	histories = append(histories, s.Filings.Recent)
+	histories = append(histories, s.Filings.Supplemental...)
+	seen := make(map[string]struct{})
+	filings := make([]Filing, 0)
+	for _, history := range histories {
+		for _, filing := range filingsFromHistory(cik, history) {
+			if _, ok := seen[filing.Accession]; ok {
+				continue
+			}
+			seen[filing.Accession] = struct{}{}
+			filings = append(filings, filing)
+		}
+	}
+	sort.Slice(filings, func(i, j int) bool {
+		if filings[i].FilingDate != filings[j].FilingDate {
+			return filings[i].FilingDate > filings[j].FilingDate
+		}
+		return filings[i].Accession > filings[j].Accession
+	})
+	return filings
+}
+
+func filingsFromHistory(cik string, h FilingHistory) []Filing {
 	count := len(h.AccessionNumber)
 	for _, n := range []int{len(h.FilingDate), len(h.Form), len(h.PrimaryDocument)} {
 		if n < count {
@@ -95,6 +138,7 @@ func (s *CompanySubmissions) RecentFilings(cik string) []Filing {
 type FinancialFact struct {
 	Company    string  `json:"company"`
 	CIK        string  `json:"cik"`
+	Taxonomy   string  `json:"taxonomy"`
 	Concept    string  `json:"concept"`
 	Label      string  `json:"label"`
 	Unit       string  `json:"unit"`
@@ -140,39 +184,70 @@ var concepts = []string{
 	"WeightedAverageNumberOfDilutedSharesOutstanding",
 }
 
+var ifrsConcepts = []string{
+	"Revenue",
+	"CurrentAssets",
+	"CurrentLiabilities",
+	"CashAndCashEquivalents",
+	"CurrentBorrowings",
+	"CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings",
+	"CurrentPortionOfLongtermBorrowings",
+	"Borrowings",
+	"NoncurrentBorrowings",
+	"ProfitLossFromOperatingActivities",
+	"IncomeTaxExpenseContinuingOperations",
+	"ProfitLossBeforeTax",
+	"ProfitLoss",
+	"DepreciationAndAmortisationExpense",
+	"PurchaseOfPropertyPlantAndEquipment",
+	"PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities",
+	"CashFlowsFromUsedInOperatingActivities",
+	"Equity",
+	"NumberOfSharesOutstanding",
+	"DilutedWeightedAverageNumberOfOrdinarySharesOutstanding",
+}
+
 func ExtractFacts(data *CompanyFacts, cik string) []FinancialFact {
 	var out []FinancialFact
-
-	usgaap, ok := data.Facts["us-gaap"]
-	if !ok {
+	if data == nil {
 		return out
 	}
 
-	for _, concept := range concepts {
-		def, ok := usgaap[concept]
-		if !ok {
-			continue
+	for _, taxonomy := range []string{"us-gaap", "ifrs-full", "dei"} {
+		definitions := data.Facts[taxonomy]
+		taxonomyConcepts := concepts
+		if taxonomy == "ifrs-full" {
+			taxonomyConcepts = make([]string, 0, len(concepts)+len(ifrsConcepts))
+			taxonomyConcepts = append(taxonomyConcepts, concepts...)
+			taxonomyConcepts = append(taxonomyConcepts, ifrsConcepts...)
 		}
+		for _, concept := range taxonomyConcepts {
+			def, ok := definitions[concept]
+			if !ok {
+				continue
+			}
 
-		for unit, entries := range def.Units {
-			for _, e := range entries {
-				if !secFilingForm(e.Form) {
-					continue
+			for unit, entries := range def.Units {
+				for _, e := range entries {
+					if !secFilingForm(e.Form) {
+						continue
+					}
+					out = append(out, FinancialFact{
+						Company:    data.Entity,
+						CIK:        cik,
+						Taxonomy:   taxonomy,
+						Concept:    concept,
+						Label:      def.Label,
+						Unit:       unit,
+						Value:      e.Value,
+						Start:      e.Start,
+						End:        e.End,
+						FilingDate: e.Filed,
+						Form:       e.Form,
+						Accession:  e.Accession,
+						Frame:      e.Frame,
+					})
 				}
-				out = append(out, FinancialFact{
-					Company:    data.Entity,
-					CIK:        cik,
-					Concept:    concept,
-					Label:      def.Label,
-					Unit:       unit,
-					Value:      e.Value,
-					Start:      e.Start,
-					End:        e.End,
-					FilingDate: e.Filed,
-					Form:       e.Form,
-					Accession:  e.Accession,
-					Frame:      e.Frame,
-				})
 			}
 		}
 	}
@@ -184,6 +259,9 @@ func ExtractFacts(data *CompanyFacts, cik string) []FinancialFact {
 		if out[i].Concept != out[j].Concept {
 			return out[i].Concept < out[j].Concept
 		}
+		if out[i].Taxonomy != out[j].Taxonomy {
+			return out[i].Taxonomy < out[j].Taxonomy
+		}
 		return out[i].FilingDate > out[j].FilingDate
 	})
 
@@ -191,6 +269,7 @@ func ExtractFacts(data *CompanyFacts, cik string) []FinancialFact {
 }
 
 func secFilingForm(form string) bool {
+	form = strings.TrimSuffix(form, "/A")
 	switch form {
 	case "10-K", "10-Q", "20-F", "40-F", "6-K":
 		return true

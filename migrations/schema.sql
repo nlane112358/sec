@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS sec_facts (
     cik                 char(10) NOT NULL REFERENCES sec_companies(cik) ON DELETE CASCADE,
     company_name        text NOT NULL,
     ticker              text NOT NULL,
+    taxonomy            text NOT NULL,
     concept             text NOT NULL,
     label               text NOT NULL,
     unit                text NOT NULL,
@@ -24,13 +25,13 @@ CREATE TABLE IF NOT EXISTS sec_facts (
     frame               text NOT NULL DEFAULT '',
     saved_at            text NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (
-        cik, concept, unit, accession_number, period_start, period_end,
+        cik, taxonomy, concept, unit, accession_number, period_start, period_end,
         form, filing_date, frame
     )
 );
 
 CREATE INDEX IF NOT EXISTS sec_facts_by_concept_period
-    ON sec_facts (cik, concept, period_end DESC);
+    ON sec_facts (cik, concept, taxonomy, period_end DESC);
 
 CREATE TABLE IF NOT EXISTS sec_filings (
     cik                 char(10) NOT NULL REFERENCES sec_companies(cik) ON DELETE CASCADE,

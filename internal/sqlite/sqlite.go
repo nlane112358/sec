@@ -26,6 +26,15 @@ func Open(path string) (*sql.DB, error) {
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
+	if _, err := db.Exec("PRAGMA busy_timeout = 5000"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("set SQLite busy timeout: %w", err)
+	}
+	var journalMode string
+	if err := db.QueryRow("PRAGMA journal_mode = WAL").Scan(&journalMode); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("enable SQLite write-ahead logging: %w", err)
+	}
 	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("enable SQLite foreign keys: %w", err)
