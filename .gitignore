@@ -33,3 +33,11 @@ go.work.sum
 # .vscode/
 
 /sec
+
+# Local company databases and SQLite journal/WAL sidecars
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*

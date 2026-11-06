@@ -24,6 +24,8 @@ options:
   -data-dir string  directory for per-company SQLite databases (default SEC_DATABASE_DIR or data)
   -ua string        SEC User-Agent including contact email (default SEC_USER_AGENT)
   -read             browse and read saved filings in the terminal
+  -summary          show key annual facts saved for the company
+  -years int        fiscal years to show with -summary (3-5, default 5)
 `
 
 var tickerPattern = regexp.MustCompile(`^[A-Z0-9][A-Z0-9.-]{0,14}$`)
@@ -33,6 +35,8 @@ func run() error {
 	dataDir := flag.String("data-dir", sqlite.DefaultDirectory(), "directory for per-company SQLite databases")
 	userAgent := flag.String("ua", os.Getenv("SEC_USER_AGENT"), "SEC User-Agent including contact email")
 	read := flag.Bool("read", false, "browse and read saved filings in the terminal")
+	summary := flag.Bool("summary", false, "show key annual facts saved for the company")
+	years := flag.Int("years", 5, "fiscal years to show with -summary (3-5)")
 	flag.Usage = func() { fmt.Fprint(flag.CommandLine.Output(), usage) }
 	flag.CommandLine.SetOutput(os.Stderr)
 	flag.Parse()
@@ -41,7 +45,10 @@ func run() error {
 	if !tickerPattern.MatchString(ticker) || ticker == "." || ticker == ".." {
 		return errors.New("provide a valid -ticker symbol, for example AAPL")
 	}
-	if *userAgent == "" {
+	if *read && *summary {
+		return errors.New("choose either -read or -summary")
+	}
+	if !*summary && *userAgent == "" {
 		return errors.New("provide -ua 'Research App contact@example.com' or set SEC_USER_AGENT")
 	}
 	if flag.NArg() != 0 {
@@ -51,6 +58,29 @@ func run() error {
 
 	if *read {
 		return sec.ReadFilings(context.Background(), databasePath, ticker, *userAgent, os.Stdin, os.Stdout)
+	}
+	if *summary {
+		if *years < 3 || *years > 5 {
+			return errors.New("-years must be between 3 and 5")
+		}
+		if _, err := os.Stat(databasePath); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("no saved data for %s; run sec -ticker %s first", ticker, ticker)
+			}
+			return fmt.Errorf("inspect company database: %w", err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		store, err := sec.OpenStore(ctx, databasePath)
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		financialSummary, err := store.FinancialSummary(ctx, *years)
+		if err != nil {
+			return err
+		}
+		return sec.WriteFinancialSummary(os.Stdout, financialSummary)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)

@@ -23,6 +23,8 @@ taxonomies, along with the company's complete filing history from SEC EDGAR.
 It creates a separate SQLite database for the company at
 `data/AAPL.db`. Choose another storage directory with `-data-dir` or
 `SEC_DATABASE_DIR`.
+Database files and SQLite sidecars are ignored by Git and remain local to your
+machine.
 
 The database schema is created automatically. The SQL definition is also
 available in [migrations/schema.sql](migrations/schema.sql).
@@ -46,6 +48,21 @@ cache directory (or `SEC_CACHE_DIR` when set). Opened filing HTML is cached at
 `<data-dir>/documents/<accession>.html` and reused on later reads.
 
 ## Inspect saved facts
+
+Show key annual metrics for the five most recent fiscal years (or choose three
+or four):
+
+```sh
+./sec -ticker AAPL -summary
+./sec -ticker AAPL -summary -years 3
+```
+
+The summary reads the company's saved database and does not need a SEC
+User-Agent. Free cash flow is operating cash flow minus capital expenditure;
+the shares row uses period-end outstanding shares when available and otherwise
+diluted weighted-average shares.
+
+For raw facts, inspect the SQLite database directly:
 
 ```sh
 sqlite3 data/AAPL.db
