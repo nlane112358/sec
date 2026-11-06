@@ -26,14 +26,14 @@ func ReadFilings(ctx context.Context, databasePath, ticker string, input io.Read
 		return fmt.Errorf("load saved company data for %s: %w", ticker, err)
 	}
 	defer store.Close()
-	company, savedTicker, err := store.LoadCompany(ctx)
+	company, savedTicker, err := store.LoadCompany(ctx, ticker)
 	if err != nil {
 		return fmt.Errorf("load saved company data for %s: %w", ticker, err)
 	}
 	if savedTicker != "" {
 		ticker = savedTicker
 	}
-	filings, err := store.LoadFilings(ctx)
+	filings, err := store.LoadFilings(ctx, ticker)
 	if err != nil {
 		return err
 	}

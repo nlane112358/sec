@@ -126,7 +126,7 @@ var summaryMetricDefinitions = []summaryMetricDefinition{
 
 // FinancialSummary reads annual facts already stored for the company and
 // returns the requested number of most recent fiscal years.
-func (s *Store) FinancialSummary(ctx context.Context, yearCount int) (FinancialSummary, error) {
+func (s *Store) FinancialSummary(ctx context.Context, yearCount int, ticker ...string) (FinancialSummary, error) {
 	if yearCount < 1 {
 		yearCount = 5
 	}
@@ -135,8 +135,15 @@ func (s *Store) FinancialSummary(ctx context.Context, yearCount int) (FinancialS
 	}
 	var summary FinancialSummary
 	var cik string
-	if err := s.db.QueryRowContext(ctx, `SELECT cik, company_name, requested_ticker
-FROM sec_companies LIMIT 1`).Scan(&cik, &summary.Company, &summary.Ticker); err != nil {
+	var err error
+	if len(ticker) > 0 && strings.TrimSpace(ticker[0]) != "" {
+		cik, summary.Company, summary.Ticker, err = s.companyForTicker(ctx, ticker[0])
+	} else {
+		err = s.db.QueryRowContext(ctx, `SELECT c.cik, c.company_name, t.ticker
+FROM sec_tickers t JOIN sec_companies c ON c.cik = t.cik
+ORDER BY t.ticker LIMIT 1`).Scan(&cik, &summary.Company, &summary.Ticker)
+	}
+	if err != nil {
 		return summary, fmt.Errorf("load company for summary: %w", err)
 	}
 

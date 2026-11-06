@@ -1,11 +1,17 @@
--- Each company uses a separate SQLite database. The application applies
--- this schema automatically when a company database is first opened.
+-- All synced companies share data/sec.db. The application applies this schema
+-- automatically when the shared database is first opened.
 
 CREATE TABLE IF NOT EXISTS sec_companies (
     cik                 char(10) PRIMARY KEY,
     company_name        text NOT NULL,
     requested_ticker    text NOT NULL,
     updated_at          text NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS sec_tickers (
+    cik                 char(10) NOT NULL REFERENCES sec_companies(cik) ON DELETE CASCADE,
+    ticker              text NOT NULL COLLATE NOCASE UNIQUE,
+    PRIMARY KEY (cik, ticker)
 );
 
 CREATE TABLE IF NOT EXISTS sec_facts (
@@ -46,3 +52,6 @@ CREATE TABLE IF NOT EXISTS sec_filings (
 
 CREATE INDEX IF NOT EXISTS sec_filings_by_date
     ON sec_filings (filing_date DESC, accession_number DESC);
+
+CREATE INDEX IF NOT EXISTS sec_filings_by_company_date
+    ON sec_filings (cik, filing_date DESC, form);

@@ -1,76 +1,136 @@
-# SEC filing reader
+# SEC filing reader and fundamentals screener
 
-Fetch company facts and SEC filing details, then inspect saved financial data or
-browse filings in the terminal.
+Fetch selected company facts and filing history from SEC EDGAR, store multiple
+companies in one local SQLite database, compare annual metrics, and rank a
+saved investable universe.
 
-## Build
+## Build and SEC User-Agent
 
 ```sh
 go build -o sec ./cmd/sec
+export SEC_USER_AGENT="Research App contact@example.com"
 ```
 
-Set `SEC_USER_AGENT` to an identifying agent string with a contact email, or
-pass the same value with `--ua` when syncing data from SEC EDGAR.
+SEC requests need an identifying User-Agent with contact information. Set
+`SEC_USER_AGENT` or pass it with `--ua` to `sync`.
 
-## Sync company data
+## Sync a universe
+
+Sync one or more tickers into the shared `data/sec.db` database:
 
 ```sh
 ./sec sync AAPL
+./sec sync AAPL MSFT GOOGL AMZN NVDA META
 ```
 
-The command downloads facts from the `us-gaap`, `ifrs-full`, and `dei`
-taxonomies, along with the company's full filing history, including amended
-filings. Progress is printed to stderr while SEC requests run. Pass another
-storage directory with `--data-dir` or set `SEC_DATABASE_DIR`.
+For a larger universe, put one ticker per line in a file and run:
 
-Each company is saved in a separate SQLite database, such as
-`data/AAPL.db`. Database files and SQLite sidecars are ignored by Git and stay
-local to your machine.
+```sh
+./sec sync --universe universe.txt
+```
 
-## Summary and exports
+The sync command processes the list in one process, shares the SEC rate limiter,
+and reports progress for each company. It downloads selected facts from the
+`us-gaap`, `ifrs-full`, and `dei` taxonomies, plus the complete filing history
+including amended filings. `--data-dir DIR` changes the directory containing
+`sec.db`; `SEC_DATABASE_DIR` can set the same default.
 
-Show key annual metrics for the five most recent fiscal years (or choose three
-or four):
+Database files and SQLite sidecars are ignored by Git and remain local to your
+machine.
+
+### Merge existing per-company databases
+
+If you have older files such as `data/AAPL.db`, merge them into the shared
+database with:
+
+```sh
+./sec migrate
+```
+
+This copies the saved companies, facts, and filings into `data/sec.db`. It is
+safe to rerun; it leaves the source databases in place.
+
+## Inspect and export facts
+
+Show annual metrics for a company:
 
 ```sh
 ./sec summary AAPL
 ./sec summary AAPL --years 3
 ```
 
-The summary reads saved data and does not need a SEC User-Agent. Free cash flow
-is operating cash flow minus capital expenditure; shares use period-end
-outstanding shares when available and otherwise diluted weighted-average
-shares.
+The summary includes revenue, operating income, net income, operating cash
+flow, capital expenditure, free cash flow, cash, borrowings, and shares. Free
+cash flow is operating cash flow minus capital expenditure. Shares use
+period-end outstanding shares when available and otherwise diluted
+weighted-average shares.
 
-Export all saved facts as CSV or JSON. CSV is the default format:
+Run a two-stage DCF using the latest annual free cash flow, cash, debt, and
+shares in the shared database:
+
+```sh
+./sec dcf AAPL
+./sec dcf AAPL --growth 8 --discount 9 --terminal 2.5 --years 5
+```
+
+Rates are entered as percentages. If `--growth` is omitted, the model uses the
+three-year historical FCF CAGR when four consecutive annual periods with
+positive FCF are available. Otherwise it reports that a growth assumption is
+required. The command prints projected cash flows, the EV-to-equity bridge, a
+per-share estimate, and a sensitivity table using nearby discount and terminal
+growth rates. It requires positive latest annual FCF and same-currency cash and
+debt facts. The model uses SEC-reported diluted weighted-average shares when
+period-end shares are unavailable; it does not fetch a market price. The
+cash-flow input is operating cash flow minus CapEx, a useful FCF proxy but not a
+complete unlevered FCFF calculation, so interpret the EV-to-equity bridge with
+that limitation in mind.
+
+List the companies saved in the shared database:
+
+```sh
+./sec list
+```
+
+Export a company's extracted facts as CSV or JSON:
 
 ```sh
 ./sec export AAPL --format csv > AAPL-facts.csv
 ./sec export AAPL --format json > AAPL-facts.json
 ```
 
-List locally cached companies with:
+## Rank companies
+
+Rank every synced company or restrict the ranking to tickers in a universe file:
 
 ```sh
-./sec list
+./sec rank
+./sec rank --universe universe.txt --years 5 --min-revenue 100000000
 ```
 
-## Open filings in your browser
+The first-pass screen requires a 10-K, 10-Q, 20-F, 40-F, or 6-K within the past
+15 months; at least four annual periods with USD facts; latest revenue above the
+threshold; positive operating cash flow and net income; and a basic
+debt-to-free-cash-flow solvency check. Eligible companies are ranked by
+percentile across three-year average free-cash-flow margin, three-year revenue
+CAGR, cash conversion, and three-year share-count reduction. Weights are 35%,
+35%, 15%, and 15%, respectively. The score ranks historical financial quality
+and growth; it does not include market valuation or a share price, and it is
+not an intrinsic-value estimate.
+
+The ranking uses the facts available in SEC filings. Companies with missing,
+non-USD, or inconsistent concepts may be excluded. Review the underlying
+figures and filings before relying on a rank.
+
+## Open SEC filings
 
 ```sh
 ./sec read AAPL
 ```
 
-Choose a filing number to open its official SEC document URL in your default
-browser. The browser loads the filing directly from SEC EDGAR; the CLI does not
+Select a filing to open its official SEC URL in your browser. The CLI does not
 download or cache filing HTML. Use `n` and `p` to move through the filing list,
 `/text` to search, and `q` to quit.
 
-To refresh a company's facts and filing list, run `sec sync TICKER` before
-opening the reader. SEC's ticker mapping is cached for 24 hours under the
-operating system's user cache directory (or `SEC_CACHE_DIR` when set). The
-reader uses `open` on macOS, `xdg-open` on Linux, and the default URL handler on
-Windows.
-
-For raw queries, the SQLite schema is documented in
-[migrations/schema.sql](migrations/schema.sql).
+SEC's ticker mapping is cached for 24 hours under the operating system's user
+cache directory (or `SEC_CACHE_DIR` when set). The SQLite schema is documented
+in [migrations/schema.sql](migrations/schema.sql).

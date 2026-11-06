@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"sec/internal/sqlite"
 )
@@ -14,6 +15,11 @@ CREATE TABLE IF NOT EXISTS sec_companies (
     company_name        text NOT NULL,
     requested_ticker    text NOT NULL,
     updated_at          text NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS sec_tickers (
+    cik                 char(10) NOT NULL REFERENCES sec_companies(cik) ON DELETE CASCADE,
+    ticker              text NOT NULL COLLATE NOCASE UNIQUE,
+    PRIMARY KEY (cik, ticker)
 );
 CREATE TABLE IF NOT EXISTS sec_facts (
     cik                 char(10) NOT NULL REFERENCES sec_companies(cik) ON DELETE CASCADE,
@@ -45,6 +51,7 @@ CREATE TABLE IF NOT EXISTS sec_filings (
     PRIMARY KEY (cik, accession_number)
 );
 CREATE INDEX IF NOT EXISTS sec_filings_by_date ON sec_filings (filing_date DESC, accession_number DESC);
+CREATE INDEX IF NOT EXISTS sec_filings_by_company_date ON sec_filings (cik, filing_date DESC, form);
 `
 
 type Store struct {
@@ -59,6 +66,11 @@ func OpenStore(ctx context.Context, path string) (*Store, error) {
 	if _, err := db.ExecContext(ctx, companySchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("initialise company database: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO sec_tickers (cik, ticker)
+SELECT cik, requested_ticker FROM sec_companies WHERE trim(requested_ticker) <> ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate SEC ticker mappings: %w", err)
 	}
 	if err := migrateFactTaxonomy(ctx, db); err != nil {
 		db.Close()
@@ -179,12 +191,23 @@ func SaveCompany(ctx context.Context, path, cik, name, ticker string) error {
 }
 
 func (s *Store) SaveCompany(ctx context.Context, cik, name, ticker string) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO sec_companies (cik, company_name, requested_ticker)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin SEC company transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO sec_companies (cik, company_name, requested_ticker)
 VALUES (?, ?, ?)
 ON CONFLICT (cik) DO UPDATE SET company_name = excluded.company_name,
-    requested_ticker = excluded.requested_ticker, updated_at = CURRENT_TIMESTAMP`, cik, name, ticker)
-	if err != nil {
+	requested_ticker = excluded.requested_ticker, updated_at = CURRENT_TIMESTAMP`, cik, name, ticker); err != nil {
 		return fmt.Errorf("save SEC company: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO sec_tickers (cik, ticker) VALUES (?, ?)
+ON CONFLICT (ticker) DO UPDATE SET cik = excluded.cik`, cik, ticker); err != nil {
+		return fmt.Errorf("save SEC ticker mapping: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit SEC company: %w", err)
 	}
 	return nil
 }
@@ -281,36 +304,67 @@ ON CONFLICT (cik, accession_number) DO UPDATE SET
 	return nil
 }
 
-func LoadCompany(ctx context.Context, path string) (string, string, error) {
+func LoadCompany(ctx context.Context, path string, ticker ...string) (string, string, error) {
 	store, err := OpenStore(ctx, path)
 	if err != nil {
 		return "", "", err
 	}
 	defer store.Close()
-	return store.LoadCompany(ctx)
+	return store.LoadCompany(ctx, ticker...)
 }
 
-func (s *Store) LoadCompany(ctx context.Context) (string, string, error) {
-	var name, ticker string
-	err := s.db.QueryRowContext(ctx, `SELECT company_name, requested_ticker FROM sec_companies LIMIT 1`).Scan(&name, &ticker)
+func (s *Store) LoadCompany(ctx context.Context, ticker ...string) (string, string, error) {
+	var name, savedTicker string
+	var err error
+	if len(ticker) > 0 && strings.TrimSpace(ticker[0]) != "" {
+		err = s.db.QueryRowContext(ctx, `SELECT c.company_name, t.ticker
+FROM sec_tickers t JOIN sec_companies c ON c.cik = t.cik
+WHERE t.ticker = ? COLLATE NOCASE LIMIT 1`, ticker[0]).Scan(&name, &savedTicker)
+	} else {
+		err = s.db.QueryRowContext(ctx, `SELECT c.company_name, t.ticker
+FROM sec_tickers t JOIN sec_companies c ON c.cik = t.cik
+ORDER BY t.ticker LIMIT 1`).Scan(&name, &savedTicker)
+	}
 	if err != nil {
 		return "", "", fmt.Errorf("load company: %w", err)
 	}
-	return name, ticker, nil
+	return name, savedTicker, nil
 }
 
-func LoadFilings(ctx context.Context, path string) ([]Filing, error) {
+func (s *Store) companyForTicker(ctx context.Context, ticker string) (string, string, string, error) {
+	var cik, name, savedTicker string
+	err := s.db.QueryRowContext(ctx, `SELECT c.cik, c.company_name, t.ticker
+FROM sec_tickers t JOIN sec_companies c ON c.cik = t.cik
+WHERE t.ticker = ? COLLATE NOCASE LIMIT 1`, ticker).Scan(&cik, &name, &savedTicker)
+	if err != nil {
+		return "", "", "", fmt.Errorf("load company %s: %w", ticker, err)
+	}
+	return cik, name, savedTicker, nil
+}
+
+func LoadFilings(ctx context.Context, path string, ticker ...string) ([]Filing, error) {
 	store, err := OpenStore(ctx, path)
 	if err != nil {
 		return nil, err
 	}
 	defer store.Close()
-	return store.LoadFilings(ctx)
+	return store.LoadFilings(ctx, ticker...)
 }
 
-func (s *Store) LoadFilings(ctx context.Context) ([]Filing, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT cik, accession_number, form, filing_date, report_date, primary_document, document_title
-FROM sec_filings ORDER BY filing_date DESC, accession_number DESC`)
+func (s *Store) LoadFilings(ctx context.Context, ticker ...string) ([]Filing, error) {
+	query := `SELECT cik, accession_number, form, filing_date, report_date, primary_document, document_title
+FROM sec_filings ORDER BY filing_date DESC, accession_number DESC`
+	args := []any{}
+	if len(ticker) > 0 && strings.TrimSpace(ticker[0]) != "" {
+		cik, _, _, err := s.companyForTicker(ctx, ticker[0])
+		if err != nil {
+			return nil, err
+		}
+		query = `SELECT cik, accession_number, form, filing_date, report_date, primary_document, document_title
+FROM sec_filings WHERE cik = ? ORDER BY filing_date DESC, accession_number DESC`
+		args = append(args, cik)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("load SEC filings: %w", err)
 	}
@@ -330,10 +384,22 @@ FROM sec_filings ORDER BY filing_date DESC, accession_number DESC`)
 	return filings, nil
 }
 
-func (s *Store) LoadFacts(ctx context.Context) ([]FinancialFact, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT company_name, cik, ticker, taxonomy, concept,
+func (s *Store) LoadFacts(ctx context.Context, ticker ...string) ([]FinancialFact, error) {
+	query := `SELECT company_name, cik, ticker, taxonomy, concept,
     label, unit, value, period_start, period_end, filing_date, form, accession_number, frame
-FROM sec_facts ORDER BY period_end DESC, taxonomy, concept, filing_date DESC`)
+FROM sec_facts ORDER BY ticker, period_end DESC, taxonomy, concept, filing_date DESC`
+	args := []any{}
+	if len(ticker) > 0 && strings.TrimSpace(ticker[0]) != "" {
+		cik, _, _, err := s.companyForTicker(ctx, ticker[0])
+		if err != nil {
+			return nil, err
+		}
+		query = `SELECT company_name, cik, ticker, taxonomy, concept,
+    label, unit, value, period_start, period_end, filing_date, form, accession_number, frame
+FROM sec_facts WHERE cik = ? ORDER BY period_end DESC, taxonomy, concept, filing_date DESC`
+		args = append(args, cik)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("load SEC facts: %w", err)
 	}
@@ -345,6 +411,9 @@ FROM sec_facts ORDER BY period_end DESC, taxonomy, concept, filing_date DESC`)
 			&fact.Label, &fact.Unit, &fact.Value, &fact.Start, &fact.End, &fact.FilingDate,
 			&fact.Form, &fact.Accession, &fact.Frame); err != nil {
 			return nil, fmt.Errorf("read SEC fact: %w", err)
+		}
+		if len(ticker) > 0 && strings.TrimSpace(ticker[0]) != "" {
+			fact.Ticker = ticker[0]
 		}
 		facts = append(facts, fact)
 	}
