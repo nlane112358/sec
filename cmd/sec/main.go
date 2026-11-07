@@ -13,7 +13,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -33,13 +35,13 @@ Commands:
   list                        List companies in the shared database
   export TICKER --format FMT  Export saved facts as csv or json
   rank [--universe FILE]      Screen and rank the saved universe
-  migrate                     Merge old per-ticker databases into sec.db
 
 Options:
   --data-dir DIR  directory containing sec.db (default SEC_DATABASE_DIR or data)
 
 Sync option:
   --ua STRING     SEC User-Agent including contact email (default SEC_USER_AGENT)
+  --workers N     concurrent sync workers (1-4, default 4)
 
 Run "sec <command> --help" for command-specific options.
 `
@@ -80,8 +82,6 @@ func run(parent context.Context, args []string, output, errorOutput io.Writer) e
 		return runExport(parent, args, output, errorOutput)
 	case "rank":
 		return runRank(parent, args, output, errorOutput)
-	case "migrate":
-		return runMigrate(parent, args, output, errorOutput)
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", command, usage)
 	}
@@ -89,11 +89,12 @@ func run(parent context.Context, args []string, output, errorOutput io.Writer) e
 
 func runSync(parent context.Context, args []string, output, errorOutput io.Writer) error {
 	flags := flag.NewFlagSet("sync", flag.ContinueOnError)
-	setFlagUsage(flags, errorOutput, "usage: sec sync TICKER... [--data-dir DIR] [--ua STRING]\n       sec sync --universe FILE [--data-dir DIR] [--ua STRING]")
+	setFlagUsage(flags, errorOutput, "usage: sec sync TICKER... [--workers 1-4] [--data-dir DIR] [--ua STRING]\n       sec sync --universe FILE [--workers 1-4] [--data-dir DIR] [--ua STRING]")
 	dataDir := flags.String("data-dir", sqlite.DefaultDirectory(), "directory containing the shared SQLite database")
 	userAgent := flags.String("ua", os.Getenv("SEC_USER_AGENT"), "SEC User-Agent including contact email")
 	universeFile := flags.String("universe", "", "file containing one ticker per line")
-	if err := parseCommandFlags(flags, args, "data-dir", "ua", "universe"); err != nil {
+	workers := flags.Int("workers", 4, "concurrent sync workers (1-4)")
+	if err := parseCommandFlags(flags, args, "data-dir", "ua", "universe", "workers"); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
@@ -106,6 +107,9 @@ func runSync(parent context.Context, args []string, output, errorOutput io.Write
 	if strings.TrimSpace(*userAgent) == "" {
 		return errors.New("provide --ua 'Research App contact@example.com' or set SEC_USER_AGENT")
 	}
+	if *workers < 1 || *workers > 4 {
+		return errors.New("--workers must be between 1 and 4")
+	}
 	databasePath := sharedDatabasePath(*dataDir)
 	store, err := sec.OpenStore(parent, databasePath)
 	if err != nil {
@@ -113,20 +117,60 @@ func runSync(parent context.Context, args []string, output, errorOutput io.Write
 	}
 	defer store.Close()
 	client := sec.NewClient(*userAgent)
-	var failures []error
-	for i, ticker := range tickers {
-		if err := parent.Err(); err != nil {
-			return err
-		}
-		ctx, cancel := context.WithTimeout(parent, 90*time.Second)
-		err := syncCompany(ctx, client, store, ticker, i+1, len(tickers), databasePath, output, errorOutput)
-		cancel()
-		if err != nil {
-			fmt.Fprintf(errorOutput, "Sync failed for %s: %v\n", ticker, err)
-			failures = append(failures, fmt.Errorf("%s: %w", ticker, err))
-		}
+	if len(tickers) == 0 {
+		return nil
+	}
+	workerCount := min(*workers, len(tickers))
+	var writeMu sync.Mutex
+	safeOutput := lockedWriter{mu: &writeMu, writer: output}
+	safeErrorOutput := lockedWriter{mu: &writeMu, writer: errorOutput}
+	_, _ = fmt.Fprintf(safeErrorOutput, "Syncing %d companies with %d workers; SEC requests share the 8.5 requests/second limiter.\n", len(tickers), workerCount)
+	type syncJob struct {
+		index  int
+		ticker string
+	}
+	jobs := make(chan syncJob, len(tickers))
+	failures := make([]error, len(tickers))
+	for index, ticker := range tickers {
+		jobs <- syncJob{index: index, ticker: ticker}
+	}
+	close(jobs)
+	var workersDone sync.WaitGroup
+	workersDone.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workersDone.Done()
+			for job := range jobs {
+				if err := parent.Err(); err != nil {
+					failures[job.index] = err
+					continue
+				}
+				ctx, cancel := context.WithTimeout(parent, 90*time.Second)
+				err := syncCompany(ctx, client, store, job.ticker, job.index+1, len(tickers), databasePath, safeOutput, safeErrorOutput)
+				cancel()
+				if err != nil {
+					fmt.Fprintf(safeErrorOutput, "Sync failed for %s: %v\n", job.ticker, err)
+					failures[job.index] = fmt.Errorf("%s: %w", job.ticker, err)
+				}
+			}
+		}()
+	}
+	workersDone.Wait()
+	if err := parent.Err(); err != nil {
+		return err
 	}
 	return errors.Join(failures...)
+}
+
+type lockedWriter struct {
+	mu     *sync.Mutex
+	writer io.Writer
+}
+
+func (w lockedWriter) Write(data []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.writer.Write(data)
 }
 
 func syncCompany(ctx context.Context, client *sec.Client, store *sec.Store, ticker string, index, count int, databasePath string, output, errorOutput io.Writer) error {
@@ -160,7 +204,7 @@ func syncCompany(ctx context.Context, client *sec.Client, store *sec.Store, tick
 	if _, err := fmt.Fprintf(errorOutput, "[%d/%d] Saving %d facts and %d filings for %s…\n", index, count, len(facts), len(filings), ticker); err != nil {
 		return err
 	}
-	if err := store.SaveCompany(ctx, cik, companyName, ticker); err != nil {
+	if err := store.SaveCompany(ctx, cik, companyName, ticker, string(submissions.SIC), submissions.SICDescription); err != nil {
 		return err
 	}
 	if err := store.SaveFacts(ctx, ticker, facts); err != nil {
@@ -203,7 +247,7 @@ func runSummary(parent context.Context, args []string, output, errorOutput io.Wr
 
 func runDCF(parent context.Context, args []string, output, errorOutput io.Writer) error {
 	flags := flag.NewFlagSet("dcf", flag.ContinueOnError)
-	setFlagUsage(flags, errorOutput, "usage: sec dcf TICKER [--mode fcf|revenue] [--growth PCT] [--discount PCT] [--capex-mode raw|normalized] [--years N] [WACC options] [--data-dir DIR]")
+	setFlagUsage(flags, errorOutput, "usage: sec dcf TICKER [--mode fcf|revenue] [--growth PCT] [--discount PCT] [--debt AMOUNT] [--capex-mode raw|normalized] [--years N] [WACC options] [--data-dir DIR]")
 	mode := flags.String("mode", "fcf", "DCF model: fcf or revenue-driven FCFF")
 	growth := flags.Float64("growth", 0, "annual forecast growth in percent; defaults to historical three-year CAGR for the selected mode")
 	discount := flags.Float64("discount", 0, "manual discount rate in percent; defaults to calculated WACC")
@@ -217,8 +261,9 @@ func runDCF(parent context.Context, args []string, output, errorOutput io.Writer
 	costOfDebt := flags.Float64("cost-debt", 5.0, "fallback pre-tax cost of debt in percent; historical interest/debt is used when available")
 	taxRate := flags.Float64("tax", 21.0, "fallback tax rate in percent; historical effective tax rate is used by default")
 	marketCap := flags.Float64("market-cap", 0, "market capitalization in reported currency units; otherwise book equity is used for WACC weights")
+	debt := flags.Float64("debt", 0, "gross debt override in reported currency units; use 0 only when filings confirm no debt")
 	dataDir := flags.String("data-dir", sqlite.DefaultDirectory(), "directory containing the shared SQLite database")
-	if err := parseCommandFlags(flags, args, "mode", "growth", "discount", "terminal", "years", "capex-mode", "normalize-capex", "risk-free", "erp", "beta", "cost-debt", "tax", "market-cap", "data-dir"); err != nil {
+	if err := parseCommandFlags(flags, args, "mode", "growth", "discount", "terminal", "years", "capex-mode", "normalize-capex", "risk-free", "erp", "beta", "cost-debt", "tax", "market-cap", "debt", "data-dir"); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
@@ -238,7 +283,7 @@ func runDCF(parent context.Context, args []string, output, errorOutput io.Writer
 		*costOfDebt < 0 || *costOfDebt >= 100 || *taxRate < 0 || *taxRate >= 100 || *beta < 0 || *marketCap < 0 {
 		return errors.New("WACC rates must be between 0 and 100 percent, and beta and market capitalization must be non-negative")
 	}
-	growthProvided, discountProvided, taxProvided, costDebtProvided := false, false, false, false
+	growthProvided, discountProvided, taxProvided, costDebtProvided, debtProvided := false, false, false, false, false
 	flags.Visit(func(parsed *flag.Flag) {
 		switch parsed.Name {
 		case "growth":
@@ -249,6 +294,8 @@ func runDCF(parent context.Context, args []string, output, errorOutput io.Writer
 			taxProvided = true
 		case "cost-debt":
 			costDebtProvided = true
+		case "debt":
+			debtProvided = true
 		}
 	})
 	if discountProvided && *discount <= 0 {
@@ -258,6 +305,10 @@ func runDCF(parent context.Context, args []string, output, errorOutput io.Writer
 		return errors.New("--discount must be less than 100 percent")
 	}
 	useNormalizedCapEx := *normalizeCapEx || *capexMode == "normalized"
+	var debtOverride *float64
+	if debtProvided {
+		debtOverride = debt
+	}
 	waccConfig := &sec.WACCConfig{
 		RiskFreeRate:         *riskFree / 100,
 		EquityRiskPremium:    *equityRiskPremium / 100,
@@ -265,6 +316,7 @@ func runDCF(parent context.Context, args []string, output, errorOutput io.Writer
 		CostOfDebt:           *costOfDebt / 100,
 		TaxRate:              *taxRate / 100,
 		MarketCap:            *marketCap,
+		DebtOverride:         debtOverride,
 		UseEffectiveTaxRate:  !taxProvided,
 		UseEstimatedCostDebt: !costDebtProvided,
 	}
@@ -276,6 +328,7 @@ func runDCF(parent context.Context, args []string, output, errorOutput io.Writer
 		TerminalRate:        *terminal / 100,
 		Years:               *years,
 		NormalizeCapEx:      useNormalizedCapEx,
+		DebtOverride:        debtOverride,
 		TaxRate:             *taxRate / 100,
 		UseEffectiveTaxRate: !taxProvided,
 		WACC:                waccConfig,
@@ -398,10 +451,11 @@ func runExport(parent context.Context, args []string, output, errorOutput io.Wri
 
 func runRank(parent context.Context, args []string, output, errorOutput io.Writer) error {
 	flags := flag.NewFlagSet("rank", flag.ContinueOnError)
-	setFlagUsage(flags, errorOutput, "usage: sec rank [--universe FILE] [--years 4|5] [--min-revenue USD] [--data-dir DIR]")
+	setFlagUsage(flags, errorOutput, "usage: sec rank [--universe FILE] [--years 5|6] [--min-revenue USD] [--exclude-financials] [--data-dir DIR]")
 	universeFile := flags.String("universe", "", "optional file restricting ranking to these tickers")
-	years := flags.Int("years", 5, "annual history to use (4-5 years)")
+	years := flags.Int("years", 6, "annual periods to use (6 periods provide five-year trends)")
 	minimumRevenue := flags.Float64("min-revenue", 100_000_000, "minimum latest annual revenue in USD")
+	excludeFinancials := flags.Bool("exclude-financials", false, "exclude SEC financial-sector SIC codes 6000-6799")
 	dataDir := flags.String("data-dir", sqlite.DefaultDirectory(), "directory containing the shared SQLite database")
 	if err := parseCommandFlags(flags, args, "universe", "years", "min-revenue", "data-dir"); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -412,8 +466,8 @@ func runRank(parent context.Context, args []string, output, errorOutput io.Write
 	if len(flags.Args()) != 0 {
 		return errors.New("rank accepts tickers through --universe FILE")
 	}
-	if *years < 4 || *years > 5 {
-		return errors.New("--years must be 4 or 5 for a three-year growth rate")
+	if *years < 5 || *years > 6 {
+		return errors.New("--years must be 5 or 6 annual periods; use 6 for five-year trends")
 	}
 	var tickers []string
 	var err error
@@ -425,30 +479,67 @@ func runRank(parent context.Context, args []string, output, errorOutput io.Write
 	}
 	databasePath := sharedDatabasePath(*dataDir)
 	return withExistingStoreTimeout(parent, databasePath, "", 30*time.Minute, func(ctx context.Context, store *sec.Store) error {
-		result, err := store.RankCompanies(ctx, *years, *minimumRevenue, tickers)
+		result, err := store.RankCompanies(ctx, *years, *minimumRevenue, tickers, *excludeFinancials)
 		if err != nil {
 			return err
 		}
-		if _, err := fmt.Fprintf(output, "Quality and growth rank: %d eligible of %d synced companies\n", len(result.Companies), result.Considered); err != nil {
+		if _, err := fmt.Fprintf(output, "Fundamental ranks: %d eligible of %d synced companies\n", len(result.Companies), result.Considered); err != nil {
 			return err
 		}
-		if _, err := fmt.Fprintf(output, "Filters: latest revenue ≥ $%.0f, positive operating cash flow and net income, solvency check; score uses percentile ranks.\n", *minimumRevenue); err != nil {
+		if _, err := fmt.Fprintf(output, "Filters: latest revenue ≥ $%.0f and positive net income in the latest three years. Nonfinancial companies also need positive latest operating cash flow; solvency is checked when cash and debt facts are present.\n", *minimumRevenue); err != nil {
 			return err
 		}
-		writer := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
-		if _, err := fmt.Fprintln(writer, "RANK\tTICKER\tCOMPANY\tSCORE\tREVENUE\tOP MARGIN\tFCF MARGIN\t3Y REV CAGR\tCASH CONV\t3Y SHARE RED."); err != nil {
+		if _, err := fmt.Fprintln(output, "Factor percentiles use SEC SIC major groups; groups with fewer than five companies broaden to the SIC division. Financials and nonfinancials use separate score models and tables."); err != nil {
 			return err
 		}
-		for i, company := range result.Companies {
-			if _, err := fmt.Fprintf(writer, "%d\t%s\t%s\t%.1f\t$%.1fM\t%.1f%%\t%.1f%%\t%.1f%%\t%.2fx\t%.1f%%\n",
-				i+1, company.Ticker, company.Company, company.Score, company.Revenue/1e6,
-				company.OperatingMargin*100, company.FCFMargin*100, company.RevenueCAGR*100,
-				company.CashConversion, company.ShareReduction*100); err != nil {
+		if _, err := fmt.Fprintln(output, "SIC peer groups are a broad industry proxy, not GICS. Financial-company scores are preliminary; insurer combined ratios and investment-return metrics are not yet included."); err != nil {
+			return err
+		}
+		if *excludeFinancials {
+			if _, err := fmt.Fprintf(output, "Financial-sector companies excluded by SIC code: %d (6000-6799).\n", result.FinancialExcluded); err != nil {
 				return err
 			}
 		}
-		if err := writer.Flush(); err != nil {
-			return err
+		if result.SICUnavailable > 0 {
+			if _, err := fmt.Fprintf(errorOutput, "Sector classification is unavailable for %d saved companies; sync them again to fetch SIC metadata. Eligible companies remain in the Unclassified peer tier.\n", result.SICUnavailable); err != nil {
+				return err
+			}
+		}
+		nonfinancial := make([]sec.RankedCompany, 0, len(result.Companies))
+		financial := make([]sec.RankedCompany, 0, result.FinancialIncluded)
+		unclassified := make([]sec.RankedCompany, 0, result.UnclassifiedIncluded)
+		for _, company := range result.Companies {
+			if company.Sector == "Financials" {
+				financial = append(financial, company)
+			} else if company.Sector == "Unclassified" {
+				unclassified = append(unclassified, company)
+			} else {
+				nonfinancial = append(nonfinancial, company)
+			}
+		}
+		if len(nonfinancial) > 0 {
+			if _, err := fmt.Fprintln(output, "Nonfinancial companies — SIC peer ranking"); err != nil {
+				return err
+			}
+			if err := writeNonfinancialRankTable(output, nonfinancial); err != nil {
+				return err
+			}
+		}
+		if len(financial) > 0 {
+			if _, err := fmt.Fprintln(output, "Financial companies — separate preliminary ranking"); err != nil {
+				return err
+			}
+			if err := writeFinancialRankTable(output, financial); err != nil {
+				return err
+			}
+		}
+		if len(unclassified) > 0 {
+			if _, err := fmt.Fprintln(output, "Unclassified companies — provisional nonfinancial model"); err != nil {
+				return err
+			}
+			if err := writeNonfinancialRankTable(output, unclassified); err != nil {
+				return err
+			}
 		}
 		if len(result.Missing) > 0 {
 			fmt.Fprintf(errorOutput, "Not synced: %s\n", strings.Join(result.Missing, ", "))
@@ -456,34 +547,102 @@ func runRank(parent context.Context, args []string, output, errorOutput io.Write
 		if len(result.Companies) == 0 {
 			fmt.Fprintln(output, "No companies passed the available-data and financial filters.")
 		}
-		_, err = fmt.Fprintln(output, "Scores rank financial quality and growth; they do not include market valuation.")
+		if result.SBCAdjusted > 0 || result.SBCFallback > 0 {
+			fmt.Fprintf(output, "Nonfinancial owner-earnings margin uses FCF less stock-based compensation where available (%d companies); %d use reported FCF. This is a proxy, not a GAAP measure or market FCF yield.\n", result.SBCAdjusted, result.SBCFallback)
+		}
+		if result.MissingSolvencyData > 0 {
+			fmt.Fprintf(output, "Solvency data is incomplete for %d nonfinancial ranked companies; missing debt or cash was not treated as zero.\n", result.MissingSolvencyData)
+		}
+		trendYears := *years - 1
+		_, err = fmt.Fprintf(output, "Nonfinancial weights: 20%% %d-year average ROIC, 15%% revenue CAGR, 15%% operating margin and positive-year consistency, 20%% owner-earnings margin proxy, 10%% net cash/assets, 10%% EPS/share growth, 10%% split-adjusted diluted-share reduction. Financial weights: 30%% %d-year ROE, 20%% revenue CAGR, 20%% book value/share growth, 20%% EPS/share growth, 10%% split-adjusted diluted-share reduction. Missing factors are omitted and remaining weights are renormalized. No market valuation or FCF yield is included.\n", trendYears, trendYears)
 		return err
 	})
 }
 
-func runMigrate(parent context.Context, args []string, output, errorOutput io.Writer) error {
-	flags := flag.NewFlagSet("migrate", flag.ContinueOnError)
-	setFlagUsage(flags, errorOutput, "usage: sec migrate [--data-dir DIR]")
-	dataDir := flags.String("data-dir", sqlite.DefaultDirectory(), "directory containing old and shared databases")
-	if err := parseCommandFlags(flags, args, "data-dir"); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
+func writeNonfinancialRankTable(output io.Writer, companies []sec.RankedCompany) error {
+	companies = orderRankedPeerGroups(companies)
+	writer := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
+	years := companies[0].TrendYears
+	if _, err := fmt.Fprintf(writer, "RANK\tTICKER\tCOMPANY\tSIC PEER\tSCORE\tREVENUE\t%dY ROIC\tOP MARGIN\tMARGIN CONS.\tOWNER MARGIN\t%dY REV CAGR\tNET CASH/ASSETS\t%dY EPS CAGR\t%dY SHARE RED.\n", years, years, years, years); err != nil {
+		return err
+	}
+	peerRank := 0
+	peerGroup := ""
+	for _, company := range companies {
+		if company.PeerGroup != peerGroup {
+			peerGroup = company.PeerGroup
+			peerRank = 0
 		}
+		peerRank++
+		shareLabel := formatRankPercent(company.ShareReduction, company.HasShareTrend)
+		if company.SplitAdjusted {
+			shareLabel += "*"
+		}
+		if _, err := fmt.Fprintf(writer, "%d\t%s\t%s\t%s\t%.1f\t$%.1fM\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			peerRank, company.Ticker, company.Company, company.PeerGroup, company.Score, company.Revenue/1e6,
+			formatRankPercent(company.ROIC, company.HasROIC),
+			formatRankPercent(company.OperatingMargin, company.HasOperatingMargin),
+			formatRankPercent(company.OperatingConsistency, company.HasOperatingMargin),
+			formatRankPercent(company.OwnerEarningsMargin, company.HasOwnerEarnings),
+			formatRankPercent(company.RevenueCAGR, true),
+			formatRankPercent(company.BalanceSheetQuality, company.HasBalanceSheet),
+			formatRankPercent(company.EPSGrowth, company.HasEPSGrowth), shareLabel); err != nil {
+			return err
+		}
+	}
+	return writer.Flush()
+}
+
+func writeFinancialRankTable(output io.Writer, companies []sec.RankedCompany) error {
+	companies = orderRankedPeerGroups(companies)
+	writer := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
+	years := companies[0].TrendYears
+	if _, err := fmt.Fprintf(writer, "RANK\tTICKER\tCOMPANY\tSIC PEER\tSCORE\tREVENUE\t%dY ROE\t%dY REV CAGR\t%dY BV/SHARE CAGR\t%dY EPS/SHARE CAGR\t%dY SHARE RED.\n", years, years, years, years, years); err != nil {
 		return err
 	}
-	if len(flags.Args()) != 0 {
-		return errors.New("migrate does not take positional arguments")
+	peerRank := 0
+	peerGroup := ""
+	for _, company := range companies {
+		if company.PeerGroup != peerGroup {
+			peerGroup = company.PeerGroup
+			peerRank = 0
+		}
+		peerRank++
+		shareLabel := formatRankPercent(company.ShareReduction, company.HasShareTrend)
+		if company.SplitAdjusted {
+			shareLabel += "*"
+		}
+		if _, err := fmt.Fprintf(writer, "%d\t%s\t%s\t%s\t%.1f\t$%.1fM\t%s\t%s\t%s\t%s\t%s\n",
+			peerRank, company.Ticker, company.Company, company.PeerGroup, company.Score, company.Revenue/1e6,
+			formatRankPercent(company.ROE, company.HasROE),
+			formatRankPercent(company.RevenueCAGR, true),
+			formatRankPercent(company.BookValueGrowth, company.HasBookValueGrowth),
+			formatRankPercent(company.EPSGrowth, company.HasEPSGrowth), shareLabel); err != nil {
+			return err
+		}
 	}
-	ctx, cancel := context.WithTimeout(parent, 30*time.Minute)
-	defer cancel()
-	databasePath := sharedDatabasePath(*dataDir)
-	report, err := sec.MigrateCompanyDatabases(ctx, *dataDir, databasePath)
-	if err != nil {
-		return err
+	return writer.Flush()
+}
+
+func formatRankPercent(value float64, available bool) string {
+	if !available {
+		return "—"
 	}
-	_, err = fmt.Fprintf(output, "merged_databases=%d companies=%d facts=%d filings=%d database=%s\n",
-		report.Databases, report.Companies, report.Facts, report.Filings, databasePath)
-	return err
+	return fmt.Sprintf("%.1f%%", value*100)
+}
+
+func orderRankedPeerGroups(companies []sec.RankedCompany) []sec.RankedCompany {
+	ordered := append([]sec.RankedCompany(nil), companies...)
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].PeerGroup != ordered[j].PeerGroup {
+			return ordered[i].PeerGroup < ordered[j].PeerGroup
+		}
+		if ordered[i].Score != ordered[j].Score {
+			return ordered[i].Score > ordered[j].Score
+		}
+		return ordered[i].Ticker < ordered[j].Ticker
+	})
+	return ordered
 }
 
 func setFlagUsage(flags *flag.FlagSet, errorOutput io.Writer, usageLine string) {

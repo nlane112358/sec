@@ -13,6 +13,7 @@ type WACCConfig struct {
 	CostOfDebt           float64
 	TaxRate              float64
 	MarketCap            float64
+	DebtOverride         *float64
 	UseEffectiveTaxRate  bool
 	UseEstimatedCostDebt bool
 }
@@ -33,6 +34,7 @@ type WACCResult struct {
 	DebtWeight        float64
 	EquitySource      string
 	CostOfDebtSource  string
+	DebtSource        string
 	TaxSource         string
 	Currency          string
 }
@@ -62,13 +64,20 @@ func CalculateWACC(summary FinancialSummary, config WACCConfig) (WACCResult, err
 	debtValues := metricValues(summary, "Debt / Borrowings")
 	cashValues := metricValues(summary, "Cash & Equivalents")
 	debt := 0.0
+	debtSource := "SEC-reported debt"
 	currency := ""
 	if len(debtValues) > 0 && debtValues[0].Present {
 		debt = debtValues[0].Value
 		currency = debtValues[0].Unit
+	} else if config.DebtOverride == nil {
+		return result, fmt.Errorf("debt / borrowings are missing; provide --debt if the filing confirms the amount")
 	}
-	if debt < 0 {
-		return result, fmt.Errorf("reported debt cannot be negative")
+	if config.DebtOverride != nil {
+		debt = *config.DebtOverride
+		debtSource = "user-provided debt override"
+	}
+	if !finite(debt) || debt < 0 {
+		return result, fmt.Errorf("debt override or reported debt must be finite and non-negative")
 	}
 	cash := 0.0
 	if len(cashValues) > 0 && cashValues[0].Present {
@@ -150,6 +159,7 @@ func CalculateWACC(summary FinancialSummary, config WACCConfig) (WACCResult, err
 		DebtWeight:        debtWeight,
 		EquitySource:      equitySource,
 		CostOfDebtSource:  costOfDebtSource,
+		DebtSource:        debtSource,
 		TaxSource:         taxSource,
 		Currency:          currency,
 	}, nil

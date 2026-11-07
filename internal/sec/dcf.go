@@ -24,6 +24,7 @@ type DCFConfig struct {
 	TerminalRate        float64
 	Years               int
 	NormalizeCapEx      bool
+	DebtOverride        *float64
 	TaxRate             float64
 	UseEffectiveTaxRate bool
 	WACC                *WACCConfig
@@ -83,6 +84,7 @@ type DCFResult struct {
 	EnterpriseValue          float64
 	Cash                     float64
 	Debt                     float64
+	DebtSource               string
 	EquityValue              float64
 	SharesOutstanding        float64
 	ValuePerShare            float64
@@ -110,7 +112,11 @@ func CalculateDCF(summary FinancialSummary, config DCFConfig) (DCFResult, error)
 
 	var waccResult *WACCResult
 	if config.WACC != nil {
-		calculated, err := CalculateWACC(summary, *config.WACC)
+		waccConfig := *config.WACC
+		if waccConfig.DebtOverride == nil {
+			waccConfig.DebtOverride = config.DebtOverride
+		}
+		calculated, err := CalculateWACC(summary, waccConfig)
 		if err == nil {
 			waccResult = &calculated
 		} else if config.DiscountRate == 0 {
@@ -131,7 +137,7 @@ func CalculateDCF(summary FinancialSummary, config DCFConfig) (DCFResult, error)
 		return result, fmt.Errorf("terminal growth must be below the discount rate")
 	}
 
-	cash, debt, shares, currency, err := dcfBalanceSheet(summary)
+	cash, debt, shares, currency, debtSource, err := dcfBalanceSheet(summary, config.DebtOverride)
 	if err != nil {
 		return result, err
 	}
@@ -206,7 +212,7 @@ func CalculateDCF(summary FinancialSummary, config DCFConfig) (DCFResult, error)
 		TerminalRate: config.TerminalRate, Years: config.Years, BaseFCF: baseFCF,
 		OperatingMargin: operatingMargin, DAToRevenue: daRatio, CapExToRevenue: capexRatio,
 		NWCToRevenue: nwcRatio, NWCSource: nwcSource,
-		Cash: cash, Debt: debt, SharesOutstanding: shares, Projections: projections,
+		Cash: cash, Debt: debt, DebtSource: debtSource, SharesOutstanding: shares, Projections: projections,
 	}
 	if config.Mode == DCFModeFCF {
 		result.HistoricalFCFCAGR, result.HasHistoricalFCFCAGR = historicalGrowth, hasHistoricalGrowth
@@ -236,7 +242,7 @@ func CalculateDCF(summary FinancialSummary, config DCFConfig) (DCFResult, error)
 	return result, nil
 }
 
-func dcfBalanceSheet(summary FinancialSummary) (cash, debt, shares float64, currency string, err error) {
+func dcfBalanceSheet(summary FinancialSummary, debtOverride *float64) (cash, debt, shares float64, currency, debtSource string, err error) {
 	if len(summary.Periods) == 0 {
 		err = fmt.Errorf("annual facts are required for DCF")
 		return
@@ -248,7 +254,8 @@ func dcfBalanceSheet(summary FinancialSummary) (cash, debt, shares float64, curr
 		err = fmt.Errorf("latest annual cash and equivalents are missing")
 		return
 	}
-	if len(debtValues) == 0 || !debtValues[0].Present {
+	hasReportedDebt := len(debtValues) > 0 && debtValues[0].Present
+	if !hasReportedDebt && debtOverride == nil {
 		err = fmt.Errorf("latest annual debt or borrowings are missing")
 		return
 	}
@@ -257,15 +264,34 @@ func dcfBalanceSheet(summary FinancialSummary) (cash, debt, shares float64, curr
 		return
 	}
 	currency = strings.TrimSpace(cashValues[0].Unit)
-	if currency == "" || !strings.EqualFold(currency, debtValues[0].Unit) {
-		err = fmt.Errorf("cash and debt must use the same currency unit")
+	if currency == "" {
+		err = fmt.Errorf("cash currency unit is missing")
 		return
+	}
+	if debtOverride != nil {
+		debt = *debtOverride
+		debtSource = "user-provided debt override"
+		if !finite(debt) || debt < 0 {
+			err = fmt.Errorf("debt override must be finite and non-negative")
+			return
+		}
+		if hasReportedDebt && !strings.EqualFold(currency, debtValues[0].Unit) {
+			err = fmt.Errorf("cash and reported debt must use the same currency unit")
+			return
+		}
+	} else {
+		if !strings.EqualFold(currency, debtValues[0].Unit) {
+			err = fmt.Errorf("cash and debt must use the same currency unit")
+			return
+		}
+		debt = debtValues[0].Value
+		debtSource = "SEC-reported debt"
 	}
 	if !strings.EqualFold(sharesValues[0].Unit, "shares") {
 		err = fmt.Errorf("shares outstanding must use shares as its unit")
 		return
 	}
-	cash, debt, shares = cashValues[0].Value, debtValues[0].Value, sharesValues[0].Value
+	cash, shares = cashValues[0].Value, sharesValues[0].Value
 	if cash < 0 || debt < 0 || !finite(cash) || !finite(debt) || !finite(shares) {
 		err = fmt.Errorf("cash, debt, and shares must be finite and non-negative")
 	}
@@ -686,9 +712,9 @@ func WriteDCFResult(output io.Writer, result DCFResult) error {
 	if _, err := fmt.Fprintln(output, "Valuation Bridge:"); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(output, "  Enterprise value:\t%s\n  + Cash & equivalents:\t%s\n  - Total debt:\t%s\n  Equity value:\t%s\n  Shares outstanding:\t%s\n\n",
+	if _, err := fmt.Fprintf(output, "  Enterprise value:\t%s\n  + Cash & equivalents:\t%s\n  - Total debt (%s):\t%s\n  Equity value:\t%s\n  Shares outstanding:\t%s\n\n",
 		formatDCFMoney(result.EnterpriseValue, result.Currency), formatDCFMoney(result.Cash, result.Currency),
-		formatDCFMoney(result.Debt, result.Currency), formatDCFMoney(result.EquityValue, result.Currency),
+		result.DebtSource, formatDCFMoney(result.Debt, result.Currency), formatDCFMoney(result.EquityValue, result.Currency),
 		formatDCFValue(result.SharesOutstanding, "shares")); err != nil {
 		return err
 	}
@@ -739,10 +765,10 @@ func WriteDCFResult(output io.Writer, result DCFResult) error {
 }
 
 func writeWACC(output io.Writer, wacc WACCResult, currency string) error {
-	_, err := fmt.Fprintf(output, "  WACC estimate:\t%7.2f%%\n  Risk-free / beta / ERP:\t%.2f%% / %.2f / %.2f%%\n  Cost of equity:\t%7.2f%%\n  Cost of debt:\t%7.2f%% (%s)\n  Capital weights (equity / net debt):\t%.1f%% / %.1f%%\n  Equity basis:\t%s\n  Debt / cash used for weights:\t%s / %s\n",
+	_, err := fmt.Fprintf(output, "  WACC estimate:\t%7.2f%%\n  Risk-free / beta / ERP:\t%.2f%% / %.2f / %.2f%%\n  Cost of equity:\t%7.2f%%\n  Cost of debt:\t%7.2f%% (%s)\n  Capital weights (equity / net debt):\t%.1f%% / %.1f%%\n  Equity basis:\t%s\n  Debt basis:\t%s\n  Debt / cash used for weights:\t%s / %s\n",
 		wacc.Rate*100, wacc.RiskFreeRate*100, wacc.Beta, wacc.EquityRiskPremium*100,
 		wacc.CostOfEquity*100, wacc.CostOfDebt*100, wacc.CostOfDebtSource,
-		wacc.EquityWeight*100, wacc.DebtWeight*100, wacc.EquitySource,
+		wacc.EquityWeight*100, wacc.DebtWeight*100, wacc.EquitySource, wacc.DebtSource,
 		formatDCFMoney(wacc.GrossDebt, currency), formatDCFMoney(wacc.Cash, currency))
 	return err
 }

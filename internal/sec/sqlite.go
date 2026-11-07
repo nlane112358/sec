@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS sec_companies (
     cik                 char(10) PRIMARY KEY,
     company_name        text NOT NULL,
     requested_ticker    text NOT NULL,
+    sic                 text NOT NULL DEFAULT '',
+    sic_description     text NOT NULL DEFAULT '',
     updated_at          text NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS sec_tickers (
@@ -67,15 +69,6 @@ func OpenStore(ctx context.Context, path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("initialise company database: %w", err)
 	}
-	if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO sec_tickers (cik, ticker)
-SELECT cik, requested_ticker FROM sec_companies WHERE trim(requested_ticker) <> ''`); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate SEC ticker mappings: %w", err)
-	}
-	if err := migrateFactTaxonomy(ctx, db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate SEC facts schema: %w", err)
-	}
 	return &Store{db: db}, nil
 }
 
@@ -94,112 +87,35 @@ func EnsureCompanyDatabase(ctx context.Context, path string) error {
 	return store.Close()
 }
 
-func migrateFactTaxonomy(ctx context.Context, db *sql.DB) error {
-	rows, err := db.QueryContext(ctx, `PRAGMA table_info(sec_facts)`)
-	if err != nil {
-		return err
-	}
-	taxonomyExists := false
-	taxonomyInPrimaryKey := false
-	for rows.Next() {
-		var cid, notNull, primaryKeyPosition int
-		var name, columnType string
-		var defaultValue sql.NullString
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKeyPosition); err != nil {
-			rows.Close()
-			return err
-		}
-		if name == "taxonomy" {
-			taxonomyExists = true
-			taxonomyInPrimaryKey = primaryKeyPosition > 0
-		}
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	if taxonomyExists && taxonomyInPrimaryKey {
-		return nil
-	}
-
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `ALTER TABLE sec_facts RENAME TO sec_facts_legacy`); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, factTableSchema); err != nil {
-		return err
-	}
-	taxonomyValue := `'us-gaap'`
-	if taxonomyExists {
-		taxonomyValue = `COALESCE(NULLIF(taxonomy, ''), 'us-gaap')`
-	}
-	copyFacts := `INSERT INTO sec_facts (
-    cik, company_name, ticker, taxonomy, concept, label, unit, value,
-    period_start, period_end, filing_date, form, accession_number, frame, saved_at
-) SELECT cik, company_name, ticker, ` + taxonomyValue + `, concept, label, unit, value,
-    period_start, period_end, filing_date, form, accession_number, frame, saved_at
-FROM sec_facts_legacy`
-	if _, err := tx.ExecContext(ctx, copyFacts); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `DROP TABLE sec_facts_legacy`); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS sec_facts_by_concept_period
-ON sec_facts (cik, concept, taxonomy, period_end DESC)`); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-const factTableSchema = `CREATE TABLE sec_facts (
-    cik                 char(10) NOT NULL REFERENCES sec_companies(cik) ON DELETE CASCADE,
-    company_name        text NOT NULL,
-    ticker              text NOT NULL,
-    taxonomy            text NOT NULL,
-    concept             text NOT NULL,
-    label               text NOT NULL,
-    unit                text NOT NULL,
-    value               double precision NOT NULL,
-    period_start        text NOT NULL DEFAULT '',
-    period_end          text NOT NULL,
-    filing_date         text NOT NULL,
-    form                text NOT NULL,
-    accession_number    text NOT NULL,
-    frame               text NOT NULL DEFAULT '',
-    saved_at            text NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (
-        cik, taxonomy, concept, unit, accession_number, period_start,
-        period_end, form, filing_date, frame
-    )
-)`
-
-func SaveCompany(ctx context.Context, path, cik, name, ticker string) error {
+func SaveCompany(ctx context.Context, path, cik, name, ticker string, metadata ...string) error {
 	store, err := OpenStore(ctx, path)
 	if err != nil {
 		return err
 	}
 	defer store.Close()
-	return store.SaveCompany(ctx, cik, name, ticker)
+	return store.SaveCompany(ctx, cik, name, ticker, metadata...)
 }
 
-func (s *Store) SaveCompany(ctx context.Context, cik, name, ticker string) error {
+func (s *Store) SaveCompany(ctx context.Context, cik, name, ticker string, metadata ...string) error {
+	sic, sicDescription := "", ""
+	if len(metadata) > 0 {
+		sic = strings.TrimSpace(metadata[0])
+	}
+	if len(metadata) > 1 {
+		sicDescription = strings.TrimSpace(metadata[1])
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin SEC company transaction: %w", err)
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO sec_companies (cik, company_name, requested_ticker)
-VALUES (?, ?, ?)
+	if _, err := tx.ExecContext(ctx, `INSERT INTO sec_companies (cik, company_name, requested_ticker, sic, sic_description)
+VALUES (?, ?, ?, ?, ?)
 ON CONFLICT (cik) DO UPDATE SET company_name = excluded.company_name,
-	requested_ticker = excluded.requested_ticker, updated_at = CURRENT_TIMESTAMP`, cik, name, ticker); err != nil {
+	requested_ticker = excluded.requested_ticker,
+	sic = CASE WHEN excluded.sic <> '' THEN excluded.sic ELSE sec_companies.sic END,
+	sic_description = CASE WHEN excluded.sic_description <> '' THEN excluded.sic_description ELSE sec_companies.sic_description END,
+	updated_at = CURRENT_TIMESTAMP`, cik, name, ticker, sic, sicDescription); err != nil {
 		return fmt.Errorf("save SEC company: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO sec_tickers (cik, ticker) VALUES (?, ?)

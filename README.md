@@ -21,6 +21,7 @@ Sync one or more tickers into the shared `data/sec.db` database:
 ```sh
 ./sec sync AAPL
 ./sec sync AAPL MSFT GOOGL AMZN NVDA META
+./sec sync --universe universe.txt --workers 4
 ```
 
 For a larger universe, put one ticker per line in a file and run:
@@ -29,26 +30,15 @@ For a larger universe, put one ticker per line in a file and run:
 ./sec sync --universe universe.txt
 ```
 
-The sync command processes the list in one process, shares the SEC rate limiter,
-and reports progress for each company. It downloads selected facts from the
+The sync command uses up to four workers by default (`--workers 1` makes it
+sequential), shares the SEC rate limiter across all requests, and reports
+progress for each company. It downloads selected facts from the
 `us-gaap`, `ifrs-full`, and `dei` taxonomies, plus the complete filing history
 including amended filings. `--data-dir DIR` changes the directory containing
 `sec.db`; `SEC_DATABASE_DIR` can set the same default.
 
 Database files and SQLite sidecars are ignored by Git and remain local to your
 machine.
-
-### Merge existing per-company databases
-
-If you have older files such as `data/AAPL.db`, merge them into the shared
-database with:
-
-```sh
-./sec migrate
-```
-
-This copies the saved companies, facts, and filings into `data/sec.db`. It is
-safe to rerun; it leaves the source databases in place.
 
 ## Inspect and export facts
 
@@ -61,9 +51,12 @@ Show annual metrics for a company:
 
 The summary includes revenue, operating income, net income, operating cash
 flow, capital expenditure, depreciation and amortization, free cash flow, cash,
-borrowings, and shares. Free cash flow is operating cash flow minus capital
-expenditure. Shares use period-end outstanding shares when available and
-otherwise diluted weighted-average shares.
+borrowings, stock-based compensation (SBC), an SBC-adjusted FCF proxy, and
+shares. Free cash flow is operating cash flow minus capital expenditure. The
+SBC-adjusted proxy subtracts reported SBC from FCF; it is not a GAAP measure and
+may be unavailable when a filing does not report a matching fact. Shares use
+period-end outstanding shares when available and otherwise diluted
+weighted-average shares.
 
 Run a two-stage DCF using annual SEC facts:
 
@@ -72,6 +65,7 @@ Run a two-stage DCF using annual SEC facts:
 ./sec dcf AAPL --growth 8 --discount 9 --terminal 2.5 --years 5
 ./sec dcf GOOGL --mode revenue --growth 9 --beta 1.1 --market-cap 2.5e12
 ./sec dcf META --mode revenue --capex-mode normalized
+./sec dcf PLTR --debt 0
 ```
 
 Rates are entered as percentages. `--mode fcf` (the default) grows operating
@@ -103,7 +97,9 @@ are omitted. EDGAR does not report beta or market capitalization: provide
 as the equity-weight proxy. The debt weight uses reported net debt (borrowings
 less cash, floored at zero), while the DCF equity bridge separately adds cash
 and subtracts gross debt. Monetary assumptions such as `--market-cap` must use
-the company's reported currency units.
+the company's reported currency units. If a filing confirms a zero debt balance
+but EDGAR has no zero-valued XBRL fact, pass `--debt 0`; the override is shown
+in the output and is not saved to the database.
 
 The command prints projected cash flows, the EV-to-equity bridge, a per-share
 estimate, and a sensitivity table using nearby discount and terminal growth
@@ -134,18 +130,48 @@ Rank every synced company or restrict the ranking to tickers in a universe file:
 
 ```sh
 ./sec rank
-./sec rank --universe universe.txt --years 5 --min-revenue 100000000
+./sec rank --universe universe.txt --years 6 --min-revenue 100000000
+./sec rank --exclude-financials
 ```
 
-The first-pass screen requires a 10-K, 10-Q, 20-F, 40-F, or 6-K within the past
-15 months; at least four annual periods with USD facts; latest revenue above the
-threshold; positive operating cash flow and net income; and a basic
-debt-to-free-cash-flow solvency check. Eligible companies are ranked by
-percentile across three-year average free-cash-flow margin, three-year revenue
-CAGR, cash conversion, and three-year share-count reduction. Weights are 35%,
-35%, 15%, and 15%, respectively. The score ranks historical financial quality
-and growth; it does not include market valuation or a share price, and it is
-not an intrinsic-value estimate.
+The screen requires a recent filing, six annual periods for five-year trends,
+latest revenue above the threshold, and positive net income in the latest three
+years. Nonfinancial companies also need positive latest operating cash flow;
+solvency is checked when cash and debt facts are both available. Run
+`./sec rank --years 5` for four-year trends.
+
+Nonfinancial companies use within-industry percentiles for five-year average
+ROIC (20%), revenue CAGR (15%), operating margin and profitable-year
+consistency (15%), owner-earnings margin proxy (20%), net cash/assets (10%),
+EPS per-share growth (10%), and diluted-share reduction (10%). Financial
+companies appear in a separate table and use five-year ROE (30%), revenue CAGR
+(20%), book value per share growth (20%), EPS per share growth (20%), and
+diluted-share reduction (10%). Banks, insurers, investment companies, and real
+estate businesses have different accounting; the financial score is a
+preliminary screen and does not yet include insurer combined ratios or
+investment-return measures.
+
+Peer percentiles use SEC SIC two-digit major groups as a broad industry proxy;
+groups with fewer than five companies broaden to the SIC division. EDGAR does
+not provide GICS classifications. SIC 6000-6799 is treated as financial,
+including real estate. Re-sync older saved companies to populate SIC metadata.
+Companies with missing SIC stay in an Unclassified peer group. When a factor is
+unavailable, it is omitted and the available factor weights are renormalized. A
+missing operating-income fact is shown as `—`, not scored as a zero margin.
+Operating income is derived only when the filing provides revenue, cost of
+revenue, SG&A, and R&D in matching units; re-sync companies to import these newly
+supported concepts.
+
+Share trends use diluted weighted-average shares rather than point-in-time DEI
+shares. The rank prefers the latest restated SEC facts and adjusts older values
+when adjacent periods differ by nearly an exact common split ratio; adjusted
+share-reduction values are marked with `*`. This catches historical splits
+outside the comparative periods in a filing, but the SEC company-facts feed
+does not provide a definitive split-event series, so review marked adjustments.
+Owner-earnings margin is FCF less stock-based compensation when matching SBC
+facts are available, otherwise reported FCF. It is not a market FCF yield:
+market prices and market capitalization are not part of SEC company facts.
+Scores are peer-relative, not intrinsic-value estimates.
 
 The ranking uses the facts available in SEC filings. Companies with missing,
 non-USD, or inconsistent concepts may be excluded. Review the underlying
@@ -162,5 +188,4 @@ download or cache filing HTML. Use `n` and `p` to move through the filing list,
 `/text` to search, and `q` to quit.
 
 SEC's ticker mapping is cached for 24 hours under the operating system's user
-cache directory (or `SEC_CACHE_DIR` when set). The SQLite schema is documented
-in [migrations/schema.sql](migrations/schema.sql).
+cache directory (or `SEC_CACHE_DIR` when set).

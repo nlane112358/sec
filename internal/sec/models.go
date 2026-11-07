@@ -1,9 +1,11 @@
 package sec
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -29,10 +31,67 @@ type CompanyFacts struct {
 	} `json:"facts"`
 }
 
+// UnmarshalJSON accepts both numeric and string CIK encodings. SEC company
+// facts responses use both forms for different registrants.
+func (facts *CompanyFacts) UnmarshalJSON(data []byte) error {
+	type companyFactsAlias CompanyFacts
+	var decoded struct {
+		CIK json.RawMessage `json:"cik"`
+		*companyFactsAlias
+	}
+	decoded.companyFactsAlias = (*companyFactsAlias)(facts)
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	cikText := strings.TrimSpace(string(decoded.CIK))
+	if cikText == "" || cikText == "null" {
+		facts.CIK = 0
+		return nil
+	}
+	if strings.HasPrefix(cikText, `"`) {
+		if err := json.Unmarshal(decoded.CIK, &cikText); err != nil {
+			return fmt.Errorf("decode company facts CIK: %w", err)
+		}
+	}
+	value, err := strconv.ParseInt(cikText, 10, strconv.IntSize)
+	if err != nil {
+		return fmt.Errorf("decode company facts CIK %q: %w", cikText, err)
+	}
+	facts.CIK = int(value)
+	return nil
+}
+
 type CompanySubmissions struct {
-	CIK     string            `json:"cik"`
-	Name    string            `json:"name"`
-	Filings SubmissionFilings `json:"filings"`
+	CIK            string            `json:"cik"`
+	Name           string            `json:"name"`
+	SIC            SICCode           `json:"sic"`
+	SICDescription string            `json:"sicDescription"`
+	Filings        SubmissionFilings `json:"filings"`
+}
+
+// SICCode accepts the string and numeric forms used in SEC submissions JSON.
+type SICCode string
+
+func (code *SICCode) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" || len(data) == 0 {
+		*code = ""
+		return nil
+	}
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		*code = SICCode(strings.TrimSpace(text))
+		return nil
+	}
+	var number json.Number
+	if err := json.Unmarshal(data, &number); err != nil {
+		return fmt.Errorf("decode SIC code: %w", err)
+	}
+	parsed, err := strconv.ParseInt(number.String(), 10, 32)
+	if err != nil {
+		return fmt.Errorf("decode SIC code %q: %w", number, err)
+	}
+	*code = SICCode(strconv.FormatInt(parsed, 10))
+	return nil
 }
 
 type SubmissionFilings struct {
@@ -167,6 +226,7 @@ var concepts = []string{
 	"Revenues",
 	"SalesRevenueNet",
 	"AssetsCurrent",
+	"Assets",
 	"LiabilitiesCurrent",
 	"CashAndCashEquivalentsAtCarryingValue",
 	"ShortTermBorrowings",
@@ -174,6 +234,13 @@ var concepts = []string{
 	"LongTermDebtNoncurrent",
 	"LongTermDebt",
 	"OperatingIncomeLoss",
+	"CostOfRevenue",
+	"CostOfGoodsAndServicesSold",
+	"CostOfGoodsSold",
+	"SellingGeneralAndAdministrativeExpense",
+	"ResearchAndDevelopmentExpense",
+	"GoodwillImpairmentLoss",
+	"GoodwillAndIntangibleAssetImpairment",
 	"IncomeTaxExpenseBenefit",
 	"InterestExpenseNonOperating",
 	"InterestAndDebtExpense",
@@ -182,6 +249,8 @@ var concepts = []string{
 	"DepreciationDepletionAndAmortization",
 	"PaymentsToAcquirePropertyPlantAndEquipment",
 	"NetCashProvidedByUsedInOperatingActivities",
+	"ShareBasedCompensation",
+	"AllocatedShareBasedCompensationExpense",
 	"StockholdersEquity",
 	"EntityCommonStockSharesOutstanding",
 	"WeightedAverageNumberOfDilutedSharesOutstanding",
@@ -198,6 +267,11 @@ var ifrsConcepts = []string{
 	"Borrowings",
 	"NoncurrentBorrowings",
 	"ProfitLossFromOperatingActivities",
+	"CostOfSales",
+	"SellingGeneralAndAdministrativeExpense",
+	"AdministrativeExpense",
+	"ResearchAndDevelopmentExpense",
+	"ImpairmentLossRecognisedInProfitOrLoss",
 	"IncomeTaxExpenseContinuingOperations",
 	"FinanceCosts",
 	"ProfitLossBeforeTax",
@@ -206,6 +280,7 @@ var ifrsConcepts = []string{
 	"PurchaseOfPropertyPlantAndEquipment",
 	"PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities",
 	"CashFlowsFromUsedInOperatingActivities",
+	"ExpenseFromSharebasedPaymentTransactionsInWhichGoodsOrServicesReceivedDidNotQualifyForRecognitionAsAssets",
 	"Equity",
 	"NumberOfSharesOutstanding",
 	"DilutedWeightedAverageNumberOfOrdinarySharesOutstanding",

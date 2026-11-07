@@ -55,9 +55,10 @@ type summaryConcept struct {
 }
 
 type summaryMetricDefinition struct {
-	name         string
-	concepts     []summaryConcept
-	freeCashFlow bool
+	name          string
+	concepts      []summaryConcept
+	freeCashFlow  bool
+	ownerEarnings bool
 }
 
 var summaryMetricDefinitions = []summaryMetricDefinition{
@@ -75,6 +76,38 @@ var summaryMetricDefinitions = []summaryMetricDefinition{
 		concepts: []summaryConcept{
 			{taxonomy: "us-gaap", concept: "OperatingIncomeLoss", duration: true},
 			{taxonomy: "ifrs-full", concept: "ProfitLossFromOperatingActivities", duration: true},
+		},
+	},
+	{
+		name: "Cost of Revenue",
+		concepts: []summaryConcept{
+			{taxonomy: "us-gaap", concept: "CostOfRevenue", duration: true},
+			{taxonomy: "us-gaap", concept: "CostOfGoodsAndServicesSold", duration: true},
+			{taxonomy: "us-gaap", concept: "CostOfGoodsSold", duration: true},
+			{taxonomy: "ifrs-full", concept: "CostOfSales", duration: true},
+		},
+	},
+	{
+		name: "Selling, General & Administrative",
+		concepts: []summaryConcept{
+			{taxonomy: "us-gaap", concept: "SellingGeneralAndAdministrativeExpense", duration: true},
+			{taxonomy: "ifrs-full", concept: "SellingGeneralAndAdministrativeExpense", duration: true},
+			{taxonomy: "ifrs-full", concept: "AdministrativeExpense", duration: true},
+		},
+	},
+	{
+		name: "Research & Development",
+		concepts: []summaryConcept{
+			{taxonomy: "us-gaap", concept: "ResearchAndDevelopmentExpense", duration: true},
+			{taxonomy: "ifrs-full", concept: "ResearchAndDevelopmentExpense", duration: true},
+		},
+	},
+	{
+		name: "Goodwill & Intangible Impairment",
+		concepts: []summaryConcept{
+			{taxonomy: "us-gaap", concept: "GoodwillImpairmentLoss", duration: true},
+			{taxonomy: "us-gaap", concept: "GoodwillAndIntangibleAssetImpairment", duration: true},
+			{taxonomy: "ifrs-full", concept: "ImpairmentLossRecognisedInProfitOrLoss", duration: true},
 		},
 	},
 	{
@@ -111,6 +144,18 @@ var summaryMetricDefinitions = []summaryMetricDefinition{
 		freeCashFlow: true,
 	},
 	{
+		name: "Stock-Based Compensation",
+		concepts: []summaryConcept{
+			{taxonomy: "us-gaap", concept: "ShareBasedCompensation", duration: true},
+			{taxonomy: "us-gaap", concept: "AllocatedShareBasedCompensationExpense", duration: true},
+			{taxonomy: "ifrs-full", concept: "ExpenseFromSharebasedPaymentTransactionsInWhichGoodsOrServicesReceivedDidNotQualifyForRecognitionAsAssets", duration: true},
+		},
+	},
+	{
+		name:          "SBC-Adjusted FCF Proxy",
+		ownerEarnings: true,
+	},
+	{
 		name: "Cash & Equivalents",
 		concepts: []summaryConcept{
 			{taxonomy: "us-gaap", concept: "CashAndCashEquivalentsAtCarryingValue"},
@@ -129,6 +174,13 @@ var summaryMetricDefinitions = []summaryMetricDefinition{
 		concepts: []summaryConcept{
 			{taxonomy: "us-gaap", concept: "LiabilitiesCurrent"},
 			{taxonomy: "ifrs-full", concept: "CurrentLiabilities"},
+		},
+	},
+	{
+		name: "Total Assets",
+		concepts: []summaryConcept{
+			{taxonomy: "us-gaap", concept: "Assets"},
+			{taxonomy: "ifrs-full", concept: "Assets"},
 		},
 	},
 	{
@@ -172,6 +224,13 @@ var summaryMetricDefinitions = []summaryMetricDefinition{
 			{taxonomy: "ifrs-full", concept: "DilutedWeightedAverageNumberOfOrdinarySharesOutstanding", duration: true},
 		},
 	},
+	{
+		name: "Diluted Weighted Average Shares",
+		concepts: []summaryConcept{
+			{taxonomy: "us-gaap", concept: "WeightedAverageNumberOfDilutedSharesOutstanding", duration: true},
+			{taxonomy: "ifrs-full", concept: "DilutedWeightedAverageNumberOfOrdinarySharesOutstanding", duration: true},
+		},
+	},
 }
 
 // FinancialSummary reads annual facts already stored for the company and
@@ -180,8 +239,8 @@ func (s *Store) FinancialSummary(ctx context.Context, yearCount int, ticker ...s
 	if yearCount < 1 {
 		yearCount = 5
 	}
-	if yearCount > 5 {
-		yearCount = 5
+	if yearCount > 6 {
+		yearCount = 6
 	}
 	var summary FinancialSummary
 	var cik string
@@ -246,6 +305,15 @@ FROM sec_facts WHERE cik = ?`, cik)
 						Present: true,
 					}
 				}
+			case definition.ownerEarnings:
+				freeCashFlow := summaryMetricValue(summary.Metrics, "Free Cash Flow", i)
+				sbc := summaryMetricValue(summary.Metrics, "Stock-Based Compensation", i)
+				if freeCashFlow.Present && sbc.Present && strings.EqualFold(freeCashFlow.Unit, sbc.Unit) {
+					metric.Values[i] = SummaryValue{
+						Value: freeCashFlow.Value - math.Abs(sbc.Value),
+						Unit:  freeCashFlow.Unit, Present: true,
+					}
+				}
 			case definition.name == "Debt / Borrowings":
 				metric.Values[i] = selectDebt(facts, period.End)
 			default:
@@ -254,7 +322,54 @@ FROM sec_facts WHERE cik = ?`, cik)
 		}
 		summary.Metrics = append(summary.Metrics, metric)
 	}
+	deriveOperatingIncome(&summary)
 	return summary, nil
+}
+
+// deriveOperatingIncome fills absent direct operating-income facts only when
+// revenue and all major expense components are available in the same currency.
+func deriveOperatingIncome(summary *FinancialSummary) {
+	if summary == nil {
+		return
+	}
+	var operatingIncome, revenue, cost, sga, research, impairment []SummaryValue
+	for _, metric := range summary.Metrics {
+		switch metric.Name {
+		case "Operating Income":
+			operatingIncome = metric.Values
+		case "Revenue":
+			revenue = metric.Values
+		case "Cost of Revenue":
+			cost = metric.Values
+		case "Selling, General & Administrative":
+			sga = metric.Values
+		case "Research & Development":
+			research = metric.Values
+		case "Goodwill & Intangible Impairment":
+			impairment = metric.Values
+		}
+	}
+	for i := range operatingIncome {
+		if operatingIncome[i].Present || i >= len(revenue) || i >= len(cost) || i >= len(sga) || i >= len(research) {
+			continue
+		}
+		parts := []SummaryValue{revenue[i], cost[i], sga[i], research[i]}
+		valid := true
+		for _, part := range parts {
+			if !part.Present || !strings.EqualFold(part.Unit, revenue[i].Unit) {
+				valid = false
+				break
+			}
+		}
+		if !valid {
+			continue
+		}
+		value := revenue[i].Value - math.Abs(cost[i].Value) - math.Abs(sga[i].Value) - math.Abs(research[i].Value)
+		if i < len(impairment) && impairment[i].Present && strings.EqualFold(impairment[i].Unit, revenue[i].Unit) {
+			value -= math.Abs(impairment[i].Value)
+		}
+		operatingIncome[i] = SummaryValue{Value: value, Unit: revenue[i].Unit, Present: true}
+	}
 }
 
 func annualPeriodEnds(facts []summaryFact) []string {
@@ -389,12 +504,12 @@ func summaryUnitRank(unit string) int {
 }
 
 func selectDebt(facts []summaryFact, periodEnd string) SummaryValue {
-	if value, ok := selectSummaryFact(facts, []summaryConcept{
+	if value, ok := selectDebtFact(facts, []summaryConcept{
 		{taxonomy: "ifrs-full", concept: "Borrowings"},
 	}, periodEnd); ok {
 		return value
 	}
-	if value, ok := selectSummaryFact(facts, []summaryConcept{
+	if value, ok := selectDebtFact(facts, []summaryConcept{
 		{taxonomy: "us-gaap", concept: "LongTermDebtNoncurrent"},
 		{taxonomy: "us-gaap", concept: "LongTermDebt"},
 	}, periodEnd); ok {
@@ -403,10 +518,10 @@ func selectDebt(facts []summaryFact, periodEnd string) SummaryValue {
 			{taxonomy: "us-gaap", concept: "ShortTermBorrowings"},
 		})
 	}
-	if value, ok := selectSummaryFact(facts, []summaryConcept{
+	if value, ok := selectDebtFact(facts, []summaryConcept{
 		{taxonomy: "ifrs-full", concept: "NoncurrentBorrowings"},
 	}, periodEnd); ok {
-		current, currentOK := selectSummaryFact(facts, []summaryConcept{
+		current, currentOK := selectDebtFact(facts, []summaryConcept{
 			{taxonomy: "ifrs-full", concept: "CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings"},
 			{taxonomy: "ifrs-full", concept: "CurrentPortionOfLongtermBorrowings"},
 			{taxonomy: "ifrs-full", concept: "CurrentBorrowings"},
@@ -416,17 +531,17 @@ func selectDebt(facts []summaryFact, periodEnd string) SummaryValue {
 		}
 		return value
 	}
-	if current, ok := selectSummaryFact(facts, []summaryConcept{
+	if current, ok := selectDebtFact(facts, []summaryConcept{
 		{taxonomy: "ifrs-full", concept: "CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings"},
 		{taxonomy: "ifrs-full", concept: "CurrentPortionOfLongtermBorrowings"},
 		{taxonomy: "ifrs-full", concept: "CurrentBorrowings"},
 	}, periodEnd); ok {
 		return current
 	}
-	longTermCurrent, hasLongTermCurrent := selectSummaryFact(facts, []summaryConcept{
+	longTermCurrent, hasLongTermCurrent := selectDebtFact(facts, []summaryConcept{
 		{taxonomy: "us-gaap", concept: "LongTermDebtCurrent"},
 	}, periodEnd)
-	shortTerm, hasShortTerm := selectSummaryFact(facts, []summaryConcept{
+	shortTerm, hasShortTerm := selectDebtFact(facts, []summaryConcept{
 		{taxonomy: "us-gaap", concept: "ShortTermBorrowings"},
 	}, periodEnd)
 	if hasLongTermCurrent && hasShortTerm && longTermCurrent.Unit == shortTerm.Unit {
@@ -442,9 +557,35 @@ func selectDebt(facts []summaryFact, periodEnd string) SummaryValue {
 	return SummaryValue{}
 }
 
+// selectDebtFact first prefers a fact from an annual filing. If the issuer only
+// tagged the year-end debt balance in a later quarterly comparison, accept that
+// instant fact when its period end exactly matches the annual period.
+func selectDebtFact(facts []summaryFact, concepts []summaryConcept, periodEnd string) (SummaryValue, bool) {
+	if value, ok := selectSummaryFact(facts, concepts, periodEnd); ok {
+		return value, true
+	}
+	for _, concept := range concepts {
+		var best summaryFact
+		found := false
+		for _, fact := range facts {
+			if fact.taxonomy != concept.taxonomy || fact.concept != concept.concept || fact.start != "" ||
+				fact.end != periodEnd || !secFilingForm(fact.form) {
+				continue
+			}
+			if !found || betterSummaryFact(fact, best, periodEnd) {
+				best, found = fact, true
+			}
+		}
+		if found {
+			return SummaryValue{Value: best.value, Unit: best.unit, Present: true}, true
+		}
+	}
+	return SummaryValue{}, false
+}
+
 func addDebtComponents(total SummaryValue, facts []summaryFact, periodEnd string, components []summaryConcept) SummaryValue {
 	for _, component := range components {
-		value, ok := selectSummaryFact(facts, []summaryConcept{component}, periodEnd)
+		value, ok := selectDebtFact(facts, []summaryConcept{component}, periodEnd)
 		if !ok || value.Unit != total.Unit {
 			continue
 		}
@@ -517,7 +658,7 @@ func WriteFinancialSummary(output io.Writer, summary FinancialSummary) error {
 	if err := writer.Flush(); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintln(output, "Free cash flow = operating cash flow − capital expenditure. Shares use period-end outstanding when available; otherwise diluted weighted-average shares.")
+	_, err := fmt.Fprintln(output, "Free cash flow = operating cash flow − capital expenditure. SBC-adjusted FCF proxy = free cash flow − stock-based compensation; it is not a GAAP metric. Shares use period-end outstanding when available; otherwise diluted weighted-average shares.")
 	return err
 }
 

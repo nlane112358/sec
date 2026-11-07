@@ -23,6 +23,7 @@ const tickerCacheTTL = 24 * time.Hour
 // A burst capacity of one spaces requests below EDGAR's published limit,
 // including requests made concurrently by separate Client values.
 var secRequestLimiter = newTokenBucket(secRequestRate, 1)
+var tickerMappingMu sync.Mutex
 
 type tokenBucket struct {
 	mu       sync.Mutex
@@ -234,6 +235,9 @@ func (c *Client) ResolveTicker(ctx context.Context, ticker string) (string, erro
 }
 
 func (c *Client) companyTickerMapping(ctx context.Context) (map[string]tickerEntry, error) {
+	tickerMappingMu.Lock()
+	defer tickerMappingMu.Unlock()
+
 	cachePath := tickerCachePath()
 	var stale *tickerMapCache
 	if data, err := os.ReadFile(cachePath); err == nil {
