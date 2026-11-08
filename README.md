@@ -34,7 +34,7 @@ Display 3 to 5 years of annual metrics:
 ./sec summary AAPL --years 3
 ```
 
-Reports revenue, operating income, net income, operating cash flow (OCF), CapEx, D&A, free cash flow ($\text{OCF} - \text{CapEx}$), stock-based compensation (SBC), an SBC-adjusted FCF proxy, cash, borrowings, and share counts (period-end outstanding when available, otherwise diluted weighted-average).
+Reports revenue, operating income, net income, operating cash flow (OCF), CapEx, D&A, free cash flow (`OCF - CapEx`), stock-based compensation (SBC), an SBC-adjusted FCF proxy, cash, borrowings, and share counts (period-end outstanding when available, otherwise diluted weighted-average).
 
 ### Discounted Cash Flow (`dcf`)
 
@@ -49,11 +49,11 @@ Run a two-stage DCF model with projected cash flows, an EV-to-equity bridge, per
 ```
 
 - **Forecast Modes**:
-  - `fcf` *(default)*: Grows $\text{OCF} - \text{CapEx}$ from the 3-year historical FCF CAGR (when 4 consecutive positive annual periods exist). Raw CapEx fades the growth wedge ($\text{CapEx} - \text{D\&A}$) linearly to zero by the terminal year; `--capex-mode normalized` (or `--normalize-capex`) sets CapEx equal to D&A throughout.
+  - `fcf` *(default)*: Grows `OCF - CapEx` from the 3-year historical FCF CAGR (when 4 consecutive positive annual periods exist). Raw CapEx fades the growth wedge (`CapEx - D&A`) linearly to zero by the terminal year; `--capex-mode normalized` (or `--normalize-capex`) sets CapEx equal to D&A throughout.
   - `revenue`: Builds unlevered FCFF from forecast revenue (defaulting to the 3-year revenue CAGR), trailing operating margin, effective tax rate, D&A, CapEx, and change in net working capital (current assets less current liabilities).
 - **WACC & Capital Structure**:
   - When `--discount` is omitted, WACC is estimated from `--risk-free` (default `4.84%`, [Nov 5, 2026 US 10Y Treasury](https://home.treasury.gov/resource-center/data-chart-center/interest-rates/TextView?field_tdr_date_value_month=202611&type=daily_treasury_yield_curve)), `--erp` (`5.5%`), `--beta` (`1.0`), `--cost-debt` (historical interest over average debt, fallback `5.0%`), and `--tax` (historical effective rate, fallback `21%`).
-  - Because EDGAR does not report market prices, pass `--beta` and `--market-cap` (in reported currency units); otherwise book equity and net debt ($\max(0, \text{debt} - \text{cash})$) weight WACC while the equity bridge adds cash and subtracts gross debt.
+  - Because EDGAR does not report market prices, pass `--beta` and `--market-cap` (in reported currency units); otherwise book equity and net debt (`max(0, debt - cash)`) weight WACC while the equity bridge adds cash and subtracts gross debt.
   - Pass `--debt 0` when a filing confirms zero debt without an explicit zero-valued XBRL fact.
 
 ### Rank Companies
@@ -66,12 +66,12 @@ Screen and rank synced companies by within-industry percentiles:
 ./sec rank --exclude-financials
 ```
 
-- **Eligibility**: Requires a recent filing, 6 annual periods for 5-year trends (`--years 5` for 4-year trends), latest USD revenue $\ge$ `--min-revenue` (default `$100M`), and positive net income over the last 3 years. Nonfinancials also require positive latest OCF and pass a solvency check when cash and debt facts are present.
+- **Eligibility**: Requires a recent filing, 6 annual periods for 5-year trends (`--years 5` for 4-year trends), latest USD revenue ≥ `--min-revenue` (default `$100M`), and positive net income over the last 3 years. Nonfinancials also require positive latest OCF and pass a solvency check when cash and debt facts are present.
 - **Peer Grouping**: Uses 2-digit SEC SIC major groups (broadening to SIC divisions when a group has fewer than 5 companies). Missing metrics are shown as `—` and remaining weights are renormalized.
 
 | Model | Scope | Factor Weights |
 | :--- | :--- | :--- |
-| **Nonfinancial** | Standard | **20%** ROIC · **20%** Owner-earnings margin ($\text{FCF} - \text{SBC}$) · **15%** Revenue CAGR · **15%** Operating margin & consistency · **10%** Net cash/assets · **10%** EPS CAGR · **10%** Share reduction |
+| **Nonfinancial** | Standard | **20%** ROIC · **20%** Owner-earnings margin (`FCF - SBC`) · **15%** Revenue CAGR · **15%** Operating margin & consistency · **10%** Net cash/assets · **10%** EPS CAGR · **10%** Share reduction |
 | **Financial** | SIC 6000–6799 | **30%** ROE · **20%** Revenue CAGR · **20%** Book value/share CAGR · **20%** EPS CAGR · **10%** Share reduction |
 
 > [!NOTE]
