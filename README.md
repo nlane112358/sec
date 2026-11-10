@@ -1,6 +1,6 @@
 # SEC Filing Reader & Fundamentals Screener
 
-A command-line tool to fetch SEC EDGAR company facts and filing history into a local SQLite database, inspect multi-year fundamentals, run two-stage DCF valuations, and rank an investable universe.
+A command-line tool to fetch SEC EDGAR company facts and filing history into a local SQLite database, inspect multi-year fundamentals, run forward and reverse DCF valuations, and rank an investable universe.
 
 ## Quick Start
 
@@ -34,7 +34,7 @@ Display 3 to 5 years of annual metrics:
 ./sec summary AAPL --years 3
 ```
 
-Reports revenue, operating income, net income, operating cash flow (OCF), CapEx, D&A, free cash flow (`OCF - CapEx`), stock-based compensation (SBC), an SBC-adjusted FCF proxy, cash, borrowings, and share counts (period-end outstanding when available, otherwise diluted weighted-average).
+Reports revenue, operating income, SG&A, R&D, intangible amortization, intangible-adjusted operating income, net income, operating cash flow (OCF), CapEx, D&A, free cash flow (`OCF - CapEx`), stock-based compensation (SBC), an SBC-adjusted FCF proxy, cash, borrowings, stockholders' equity, intangible capital, adjusted invested capital, intangible-adjusted ROIC, and share counts (period-end outstanding when available, otherwise diluted weighted-average).
 
 ### Discounted Cash Flow (`dcf`)
 
@@ -55,6 +55,68 @@ Run a two-stage DCF model with projected cash flows, an EV-to-equity bridge, per
   - When `--discount` is omitted, WACC is estimated from `--risk-free` (default `4.84%`, [Nov 5, 2026 US 10Y Treasury](https://home.treasury.gov/resource-center/data-chart-center/interest-rates/TextView?field_tdr_date_value_month=202611&type=daily_treasury_yield_curve)), `--erp` (`5.5%`), `--beta` (`1.0`), `--cost-debt` (historical interest over average debt, fallback `5.0%`), and `--tax` (historical effective rate, fallback `21%`).
   - Because EDGAR does not report market prices, pass `--beta` and `--market-cap` (in reported currency units); otherwise book equity and net debt (`max(0, debt - cash)`) weight WACC while the equity bridge adds cash and subtracts gross debt.
   - Pass `--debt 0` when a filing confirms zero debt without an explicit zero-valued XBRL fact.
+
+### Reverse DCF & Expectations Arbitrage
+
+Invert the DCF model to solve for the five-year growth rate implied by a market capitalization. The default reverse mode uses the SEC summary's SBC-adjusted FCF proxy, with FCF and revenue-driven FCFF also available:
+
+```sh
+./sec dcf AAPL --reverse --market-cap 3400000000000
+./sec dcf MSFT --reverse --mode fcf --market-cap 3000000000000
+./sec dcf GOOGL --reverse --mode revenue --market-cap 2200000000000
+```
+
+The inverse uses the same WACC inputs, effective tax-rate estimate, debt-cost estimate, CapEx normalization, and terminal-growth convention as the forward DCF. Market capitalization must use the currency units reported in the SEC facts.
+
+Screen the rank universe for high-quality nonfinancial companies, then rank candidates by historical growth less market-implied growth:
+
+```sh
+./sec arbitrage --prices quotes.csv --min-score 75 --min-roic 15
+./sec arbitrage --fetch-prices --min-score 75 --min-roic 15
+./sec arbitrage --prices valuations.json --universe sp500.txt
+```
+
+`--prices` accepts CSV/TSV with `TICKER,PRICE` or `TICKER,MARKET_CAP` headers, or JSON ticker/value records. A legacy `TICKER,VALUE` column treats values below $1 million as share prices and larger values as market caps. `--fetch-prices` requests Yahoo Finance v8 chart prices, with Stooq quotes for symbols Yahoo does not return. Share prices are multiplied by SEC period-end shares outstanding, then diluted weighted-average shares, with a direct SEC facts lookup if summary share counts are unavailable. The table includes separate historical-company and SIC-peer-median alpha spreads; the ranked historical growth falls back to revenue CAGR when cash-flow history is unavailable.
+
+### Intangible-Capitalized Value ("Modern GAAP Arbitrage")
+
+Standard GAAP accounting—and therefore retail screeners—treats physical CapEx as an asset, but treats foundational R&D (`ResearchAndDevelopmentExpense`) and brand/customer acquisition (`SellingGeneralAndAdministrativeExpense`) as immediate 100% operating expenses. This artificially depresses Operating Income, Book Equity, and Invested Capital for software, biotech, and high-moat consumer firms.
+
+The **Peters & Taylor Total Q / Damodaran Intangible Capitalization model** is implemented directly in `summary` and `gaap-arbitrage`:
+
+- **Capitalize R&D & 30% of SG&A**:
+  - R&D is capitalized and amortized linearly over 5 years (20% per year).
+  - 30% of SG&A is capitalized as brand/organizational capital and amortized linearly over 3 years (33.33% per year).
+- **Core Formulas**:
+  $$\text{Intangible Capital}_t = \sum_{k=0}^4 \left(1 - \frac{k}{5}\right) \text{R\&D}_{t-k} + \sum_{k=0}^2 \left(1 - \frac{k}{3}\right) (0.30 \times \text{SG\&A}_{t-k})$$
+  $$\text{Amortization}_t = \frac{1}{5} \sum_{k=1}^5 \text{R\&D}_{t-k} + \frac{1}{3} \sum_{k=1}^3 (0.30 \times \text{SG\&A}_{t-k})$$
+  $$\text{Adjusted EBIT}_t = \text{Operating Income}_t + \text{R\&D}_t + 0.30 \times \text{SG\&A}_t - \text{Amortization}_t$$
+  $$\text{Adjusted Invested Capital}_t = \text{Stockholders' Equity}_t + \text{Debt}_t - \text{Cash}_t + \text{Intangible Capital}_t$$
+  $$\text{Intangible-Adjusted ROIC}_t = \frac{\text{Adjusted EBIT}_t \times (1 - \text{taxRate})}{\frac{\text{Adjusted Invested Capital}_t + \text{Adjusted Invested Capital}_{t-1}}{2}}$$
+
+Inspect any company's intangible adjustments across 3 to 5 years:
+
+```sh
+./sec summary AAPL
+./sec summary MSFT
+```
+
+Screen for companies that look unprofitable or "expensive" on standard GAAP metrics (and are ignored by traditional value funds), but exhibit surging Intangible-Adjusted ROIC and high Intangible-Adjusted Owner Earnings Yield:
+
+```sh
+./sec gaap-arbitrage --fetch-prices --min-adj-roic 15 --min-yield 3.5
+./sec gaap-arbitrage --prices quotes.csv --surging --screen-expensive
+./sec gaap-arbitrage --min-yield 0 --sort roic --universe sp500.txt
+```
+
+- **Screener Options**:
+  - `--min-adj-roic PCT`: Minimum Intangible-Adjusted ROIC (default `15%`).
+  - `--min-yield PCT`: Minimum Intangible-Adjusted Owner Earnings Yield (`(FCF - SBC + Net Intangible Investment) / Market Cap`, default `3.5%`; pass `0` to screen without valuation).
+  - `--surging`: Require expanding Adjusted ROIC (latest > prior year or 3Y average, or ROIC spread $\ge 5\%$).
+  - `--screen-expensive`: Require company to appear expensive or unprofitable under GAAP (GAAP P/E $\ge 25$, negative P/E / GAAP loss, or ROIC spread $\ge 5\%$).
+  - `--max-gaap-roic PCT`: Cap standard GAAP ROIC to isolate firms where GAAP expensing creates the widest distortion.
+  - `--sort yield|roic|spread|score`: Sort table by Owner Yield, Adjusted ROIC, ROIC Delta spread, or composite arbitrage score.
+  - `--prices FILE` / `--fetch-prices`: Supply valuation file or pull live market prices from Yahoo Finance / Stooq.
 
 ### Rank Companies
 

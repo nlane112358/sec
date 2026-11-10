@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -31,6 +32,8 @@ Commands:
   sync --universe FILE        Sync newline-separated tickers from a file
   summary TICKER [--years N]  Show annual financial metrics (3-5 years)
   dcf TICKER [options]        Estimate intrinsic value from SEC facts
+  arbitrage [options]         Rank quality compounders against implied growth
+  gaap-arbitrage [options]    Screen modern GAAP arbitrage (intangible-capitalized value)
   read TICKER                 Browse and read saved filings
   list                        List companies in the shared database
   export TICKER --format FMT  Export saved facts as csv or json
@@ -82,6 +85,10 @@ func run(parent context.Context, args []string, output, errorOutput io.Writer) e
 		return runExport(parent, args, output, errorOutput)
 	case "rank":
 		return runRank(parent, args, output, errorOutput)
+	case "arbitrage":
+		return runArbitrage(parent, args, output, errorOutput)
+	case "gaap-arbitrage", "modern-value", "modern", "intangible":
+		return runModernGAAPArbitrage(parent, args, output, errorOutput)
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", command, usage)
 	}
@@ -247,8 +254,9 @@ func runSummary(parent context.Context, args []string, output, errorOutput io.Wr
 
 func runDCF(parent context.Context, args []string, output, errorOutput io.Writer) error {
 	flags := flag.NewFlagSet("dcf", flag.ContinueOnError)
-	setFlagUsage(flags, errorOutput, "usage: sec dcf TICKER [--mode fcf|revenue] [--growth PCT] [--discount PCT] [--debt AMOUNT] [--capex-mode raw|normalized] [--years N] [WACC options] [--data-dir DIR]")
-	mode := flags.String("mode", "fcf", "DCF model: fcf or revenue-driven FCFF")
+	setFlagUsage(flags, errorOutput, "usage: sec dcf TICKER [--reverse] [--mode owner|fcf|revenue] [--market-cap AMOUNT] [--growth PCT] [--discount PCT] [--debt AMOUNT] [--capex-mode raw|normalized] [--years N] [WACC options] [--data-dir DIR]")
+	mode := flags.String("mode", "fcf", "DCF model: fcf or revenue-driven FCFF; owner is available with --reverse")
+	reverse := flags.Bool("reverse", false, "solve for market-implied growth from --market-cap")
 	growth := flags.Float64("growth", 0, "annual forecast growth in percent; defaults to historical three-year CAGR for the selected mode")
 	discount := flags.Float64("discount", 0, "manual discount rate in percent; defaults to calculated WACC")
 	terminal := flags.Float64("terminal", 2.5, "perpetual terminal growth in percent")
@@ -273,9 +281,6 @@ func runDCF(parent context.Context, args []string, output, errorOutput io.Writer
 	if err != nil {
 		return err
 	}
-	if *mode != string(sec.DCFModeFCF) && *mode != string(sec.DCFModeRevenue) {
-		return errors.New("--mode must be fcf or revenue")
-	}
 	if *capexMode != "raw" && *capexMode != "normalized" {
 		return errors.New("--capex-mode must be raw or normalized")
 	}
@@ -283,9 +288,11 @@ func runDCF(parent context.Context, args []string, output, errorOutput io.Writer
 		*costOfDebt < 0 || *costOfDebt >= 100 || *taxRate < 0 || *taxRate >= 100 || *beta < 0 || *marketCap < 0 {
 		return errors.New("WACC rates must be between 0 and 100 percent, and beta and market capitalization must be non-negative")
 	}
-	growthProvided, discountProvided, taxProvided, costDebtProvided, debtProvided := false, false, false, false, false
+	growthProvided, discountProvided, taxProvided, costDebtProvided, debtProvided, modeProvided := false, false, false, false, false, false
 	flags.Visit(func(parsed *flag.Flag) {
 		switch parsed.Name {
+		case "mode":
+			modeProvided = true
 		case "growth":
 			growthProvided = true
 		case "discount":
@@ -298,11 +305,27 @@ func runDCF(parent context.Context, args []string, output, errorOutput io.Writer
 			debtProvided = true
 		}
 	})
+	if *reverse {
+		if !modeProvided {
+			*mode = string(sec.DCFModeOwnerEarnings)
+		}
+		if *mode != string(sec.DCFModeOwnerEarnings) && *mode != string(sec.DCFModeFCF) && *mode != string(sec.DCFModeRevenue) {
+			return errors.New("reverse DCF --mode must be owner, fcf, or revenue")
+		}
+		if growthProvided {
+			return errors.New("--growth cannot be combined with --reverse because growth is solved from market capitalization")
+		}
+	} else if *mode != string(sec.DCFModeFCF) && *mode != string(sec.DCFModeRevenue) {
+		return errors.New("--mode must be fcf or revenue; owner is available with --reverse")
+	}
 	if discountProvided && *discount <= 0 {
 		return errors.New("--discount must be greater than 0 when provided")
 	}
 	if discountProvided && *discount >= 100 {
 		return errors.New("--discount must be less than 100 percent")
+	}
+	if *reverse && *marketCap <= 0 {
+		return errors.New("--reverse requires a positive --market-cap")
 	}
 	useNormalizedCapEx := *normalizeCapEx || *capexMode == "normalized"
 	var debtOverride *float64
@@ -335,15 +358,268 @@ func runDCF(parent context.Context, args []string, output, errorOutput io.Writer
 	}
 	databasePath := sharedDatabasePath(*dataDir)
 	return withExistingStore(parent, databasePath, ticker, func(ctx context.Context, store *sec.Store) error {
-		summary, err := store.FinancialSummary(ctx, 5, ticker)
+		yearsToLoad := 5
+		if *reverse {
+			yearsToLoad = 6
+		}
+		summary, err := store.FinancialSummary(ctx, yearsToLoad, ticker)
 		if err != nil {
 			return err
+		}
+		if *reverse {
+			result, err := sec.SolveReverseDCF(summary, config)
+			if err != nil {
+				return err
+			}
+			return sec.WriteReverseDCFResult(output, result)
 		}
 		result, err := sec.CalculateDCF(summary, config)
 		if err != nil {
 			return err
 		}
 		return sec.WriteDCFResult(output, result)
+	})
+}
+
+func runArbitrage(parent context.Context, args []string, output, errorOutput io.Writer) error {
+	flags := flag.NewFlagSet("arbitrage", flag.ContinueOnError)
+	setFlagUsage(flags, errorOutput, "usage: sec arbitrage [--prices FILE] [--fetch-prices] [--min-score 75] [--min-roic 12] [--require-buybacks] [--universe FILE] [--data-dir DIR]")
+	pricesFile := flags.String("prices", "", "CSV/TSV or JSON file with ticker prices or market caps")
+	fetchPrices := flags.Bool("fetch-prices", false, "fetch live Yahoo Finance quotes (Stooq fallback) for candidates missing from --prices")
+	minScore := flags.Float64("min-score", 70, "minimum sec rank composite quality score (0-100)")
+	minROIC := flags.Float64("min-roic", 12, "minimum multi-year average ROIC in percent")
+	minConsistency := flags.Float64("min-consistency", 80, "minimum operating margin consistency in percent")
+	requireBuybacks := flags.Bool("require-buybacks", true, "require non-dilutive or shrinking share count")
+	maxImpliedGrowth := flags.Float64("max-implied-growth", 0, "optional maximum implied growth rate in percent; 0 disables the filter")
+	riskFree := flags.Float64("risk-free", 4.84, "risk-free rate in percent")
+	equityRiskPremium := flags.Float64("erp", 5.5, "equity risk premium in percent")
+	terminal := flags.Float64("terminal", 2.5, "perpetual terminal growth rate in percent")
+	universeFile := flags.String("universe", "", "optional file restricting screening to these tickers")
+	dataDir := flags.String("data-dir", sqlite.DefaultDirectory(), "directory containing the shared SQLite database")
+	if err := parseCommandFlags(flags, args, "prices", "min-score", "min-roic", "min-consistency", "max-implied-growth", "risk-free", "erp", "terminal", "universe", "data-dir"); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if len(flags.Args()) != 0 {
+		return errors.New("arbitrage accepts tickers through --universe FILE")
+	}
+	for name, value := range map[string]float64{
+		"--min-score": *minScore, "--min-roic": *minROIC,
+		"--min-consistency": *minConsistency, "--risk-free": *riskFree,
+		"--erp": *equityRiskPremium, "--terminal": *terminal,
+		"--max-implied-growth": *maxImpliedGrowth,
+	} {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return fmt.Errorf("%s must be finite", name)
+		}
+	}
+	if *minScore < 0 || *minScore > 100 || *minROIC < 0 || *minROIC > 100 || *minConsistency < 0 || *minConsistency > 100 {
+		return errors.New("--min-score, --min-roic, and --min-consistency must be between 0 and 100")
+	}
+	if *riskFree < 0 || *riskFree >= 100 || *equityRiskPremium < 0 || *equityRiskPremium >= 100 || *terminal < 0 || *terminal >= 100 || *maxImpliedGrowth < 0 {
+		return errors.New("--risk-free, --erp, and --terminal must be between 0 and 100 percent; --max-implied-growth must be non-negative")
+	}
+	var tickers []string
+	var err error
+	if *universeFile != "" {
+		tickers, err = loadTickerUniverse(nil, *universeFile)
+		if err != nil {
+			return err
+		}
+	}
+	marketCaps, prices, err := sec.LoadValuationInputs(*pricesFile)
+	if err != nil {
+		return err
+	}
+	databasePath := sharedDatabasePath(*dataDir)
+	return withExistingStoreTimeout(parent, databasePath, "", 30*time.Minute, func(ctx context.Context, store *sec.Store) error {
+		rankResult, err := store.RankCompanies(ctx, 6, 100_000_000, tickers, true)
+		if err != nil {
+			return err
+		}
+		if *fetchPrices {
+			missing := make([]string, 0)
+			for _, company := range rankResult.Companies {
+				if company.Score < *minScore || (*minROIC > 0 && (!company.HasROIC || company.ROIC < *minROIC/100)) ||
+					(*minConsistency > 0 && (!company.HasOperatingMargin || company.OperatingConsistency < *minConsistency/100)) ||
+					(*requireBuybacks && (!company.HasShareTrend || company.ShareReduction < 0)) {
+					continue
+				}
+				if valuationInput(marketCaps, company.Ticker) <= 0 && valuationInput(prices, company.Ticker) <= 0 {
+					missing = append(missing, company.Ticker)
+				}
+			}
+			if len(missing) > 0 {
+				if _, err := fmt.Fprintf(errorOutput, "Fetching live quotes for %d quality-qualified candidates…\n", len(missing)); err != nil {
+					return err
+				}
+				for ticker, price := range sec.FetchLivePrices(ctx, missing, errorOutput) {
+					prices[ticker] = price
+				}
+			}
+		}
+		waccConfig := &sec.WACCConfig{
+			RiskFreeRate: *riskFree / 100, EquityRiskPremium: *equityRiskPremium / 100,
+			Beta: 1, CostOfDebt: 0.05, TaxRate: 0.21,
+			UseEffectiveTaxRate: true, UseEstimatedCostDebt: true,
+		}
+		filter := sec.ArbitrageFilter{
+			MinScore: *minScore, MinROIC: *minROIC / 100,
+			MinOperatingConsist: *minConsistency / 100,
+			RequireBuybacks:     *requireBuybacks, MaxImpliedGrowth: *maxImpliedGrowth / 100,
+			DCFConfig: sec.DCFConfig{
+				Mode: sec.DCFModeOwnerEarnings, TerminalRate: *terminal / 100,
+				Years: 5, WACC: waccConfig,
+			},
+		}
+		candidates, err := store.ScreenExpectationsArbitrage(ctx, rankResult.Companies, marketCaps, prices, filter)
+		if err != nil {
+			return err
+		}
+		if len(candidates) == 0 {
+			_, err := fmt.Fprintln(output, "No companies matched the quality and valuation inputs. Provide --prices FILE or pass --fetch-prices.")
+			return err
+		}
+		if _, err := fmt.Fprintf(output, "Quality vs. Implied Expectations Arbitrage — %d compounders evaluated\n", len(candidates)); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(output, "Quality gate: Score ≥ %.0f | 5Y ROIC ≥ %.1f%% | Operating consistency ≥ %.0f%% | Buybacks required: %v\n", *minScore, *minROIC, *minConsistency, *requireBuybacks); err != nil {
+			return err
+		}
+		return sec.WriteArbitrageTable(output, candidates)
+	})
+}
+
+func valuationInput(values map[string]float64, ticker string) float64 {
+	if value, ok := values[strings.ToUpper(strings.TrimSpace(ticker))]; ok {
+		return value
+	}
+	for key, value := range values {
+		if strings.EqualFold(strings.TrimSpace(key), strings.TrimSpace(ticker)) {
+			return value
+		}
+	}
+	return 0
+}
+
+func runModernGAAPArbitrage(parent context.Context, args []string, output, errorOutput io.Writer) error {
+	flags := flag.NewFlagSet("gaap-arbitrage", flag.ContinueOnError)
+	setFlagUsage(flags, errorOutput, "usage: sec gaap-arbitrage [--prices FILE] [--fetch-prices] [--min-adj-roic 15] [--min-yield 3.5] [--surging] [--screen-expensive] [--max-gaap-roic PCT] [--sort yield|roic|spread|score] [--universe FILE] [--years N] [--data-dir DIR]")
+	pricesFile := flags.String("prices", "", "CSV/TSV or JSON file with ticker prices or market caps")
+	fetchPrices := flags.Bool("fetch-prices", false, "fetch live Yahoo Finance quotes (Stooq fallback) for candidates missing from --prices")
+	minAdjROIC := flags.Float64("min-adj-roic", 15.0, "minimum Intangible-Adjusted ROIC in percent")
+	minYield := flags.Float64("min-yield", 3.5, "minimum Intangible-Adjusted Owner Earnings Yield in percent; 0 disables yield filter")
+	surging := flags.Bool("surging", false, "require surging/expanding Intangible-Adjusted ROIC")
+	screenExpensive := flags.Bool("screen-expensive", false, "require company to appear expensive or unprofitable under GAAP (P/E >= 25, loss, or ROIC spread >= 5%)")
+	maxGAAPROIC := flags.Float64("max-gaap-roic", 0.0, "optional ceiling on standard GAAP ROIC in percent to isolate distorted firms")
+	sortBy := flags.String("sort", "yield", "sort table by: yield, roic, spread, or score")
+	universeFile := flags.String("universe", "", "optional file restricting screening to these tickers")
+	years := flags.Int("years", 5, "years of history to analyze")
+	dataDir := flags.String("data-dir", sqlite.DefaultDirectory(), "directory containing the shared SQLite database")
+
+	if err := parseCommandFlags(flags, args, "prices", "min-adj-roic", "min-yield", "max-gaap-roic", "sort", "universe", "years", "data-dir"); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if len(flags.Args()) != 0 {
+		return errors.New("gaap-arbitrage accepts tickers through --universe FILE")
+	}
+	for name, value := range map[string]float64{
+		"--min-adj-roic":  *minAdjROIC,
+		"--min-yield":     *minYield,
+		"--max-gaap-roic": *maxGAAPROIC,
+	} {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return fmt.Errorf("%s must be finite", name)
+		}
+	}
+	if *minAdjROIC < 0 || *minAdjROIC > 500 {
+		return errors.New("--min-adj-roic must be between 0 and 500 percent")
+	}
+	if *minYield < 0 || *minYield > 100 {
+		return errors.New("--min-yield must be between 0 and 100 percent")
+	}
+	if *years < 1 || *years > 10 {
+		return errors.New("--years must be between 1 and 10")
+	}
+
+	var tickers []string
+	var err error
+	if *universeFile != "" {
+		tickers, err = loadTickerUniverse(nil, *universeFile)
+		if err != nil {
+			return err
+		}
+	}
+
+	marketCaps, prices, err := sec.LoadValuationInputs(*pricesFile)
+	if err != nil {
+		return err
+	}
+
+	databasePath := sharedDatabasePath(*dataDir)
+	return withExistingStoreTimeout(parent, databasePath, "", 30*time.Minute, func(ctx context.Context, store *sec.Store) error {
+		companies, err := store.Companies(ctx)
+		if err != nil {
+			return err
+		}
+		if *fetchPrices {
+			tickerSet := make(map[string]bool)
+			for _, t := range tickers {
+				tickerSet[strings.ToUpper(strings.TrimSpace(t))] = true
+			}
+			missing := make([]string, 0)
+			for _, company := range companies {
+				if len(tickers) > 0 && !tickerSet[strings.ToUpper(company.Ticker)] {
+					continue
+				}
+				if valuationInput(marketCaps, company.Ticker) <= 0 && valuationInput(prices, company.Ticker) <= 0 {
+					missing = append(missing, company.Ticker)
+				}
+			}
+			if len(missing) > 0 {
+				if _, err := fmt.Fprintf(errorOutput, "Fetching live quotes for %d candidates…\n", len(missing)); err != nil {
+					return err
+				}
+				for ticker, price := range sec.FetchLivePrices(ctx, missing, errorOutput) {
+					prices[ticker] = price
+				}
+			}
+		}
+
+		filter := sec.ModernGAAPFilter{
+			MinAdjustedROIC:      *minAdjROIC / 100.0,
+			MinOwnerYield:        *minYield / 100.0,
+			RequireSurging:       *surging,
+			RequireGAAPExpensive: *screenExpensive,
+			MaxGAAPROIC:          *maxGAAPROIC / 100.0,
+			Years:                *years,
+			SortBy:               *sortBy,
+		}
+
+		candidates, err := store.ScreenModernGAAPArbitrage(ctx, tickers, marketCaps, prices, filter)
+		if err != nil {
+			return err
+		}
+		if len(candidates) == 0 {
+			if *pricesFile == "" && !*fetchPrices && *minYield > 0 {
+				_, err := fmt.Fprintln(output, "No companies matched. Pass --fetch-prices to fetch live quotes, supply --prices FILE, or set --min-yield 0.")
+				return err
+			}
+			_, err := fmt.Fprintln(output, "No companies matched the Intangible-Capitalized screening criteria. Try adjusting --min-adj-roic or --min-yield.")
+			return err
+		}
+		if _, err := fmt.Fprintf(output, "Modern GAAP Arbitrage — %d Intangible-Capitalized compounders identified\n", len(candidates)); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(output, "Screen: Adj ROIC ≥ %.1f%% | Owner Yield ≥ %.1f%% | Surging required: %v | GAAP expensive required: %v\n", *minAdjROIC, *minYield, *surging, *screenExpensive); err != nil {
+			return err
+		}
+		return sec.WriteModernGAAPTable(output, candidates)
 	})
 }
 

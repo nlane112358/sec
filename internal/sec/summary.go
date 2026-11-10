@@ -55,10 +55,16 @@ type summaryConcept struct {
 }
 
 type summaryMetricDefinition struct {
-	name          string
-	concepts      []summaryConcept
-	freeCashFlow  bool
-	ownerEarnings bool
+	name                    string
+	concepts                []summaryConcept
+	freeCashFlow            bool
+	ownerEarnings           bool
+	sgaExpense              bool
+	intangibleAmortization  bool
+	adjustedOperatingIncome bool
+	intangibleCapital       bool
+	adjustedInvestedCapital bool
+	adjustedROIC            bool
 }
 
 var summaryMetricDefinitions = []summaryMetricDefinition{
@@ -88,7 +94,8 @@ var summaryMetricDefinitions = []summaryMetricDefinition{
 		},
 	},
 	{
-		name: "Selling, General & Administrative",
+		name:       "Selling, General & Administrative",
+		sgaExpense: true,
 		concepts: []summaryConcept{
 			{taxonomy: "us-gaap", concept: "SellingGeneralAndAdministrativeExpense", duration: true},
 			{taxonomy: "ifrs-full", concept: "SellingGeneralAndAdministrativeExpense", duration: true},
@@ -101,6 +108,14 @@ var summaryMetricDefinitions = []summaryMetricDefinition{
 			{taxonomy: "us-gaap", concept: "ResearchAndDevelopmentExpense", duration: true},
 			{taxonomy: "ifrs-full", concept: "ResearchAndDevelopmentExpense", duration: true},
 		},
+	},
+	{
+		name:                   "Amortization of Intangibles",
+		intangibleAmortization: true,
+	},
+	{
+		name:                    "Adjusted Operating Income",
+		adjustedOperatingIncome: true,
 	},
 	{
 		name: "Goodwill & Intangible Impairment",
@@ -128,6 +143,7 @@ var summaryMetricDefinitions = []summaryMetricDefinition{
 		name: "Capital Expenditure",
 		concepts: []summaryConcept{
 			{taxonomy: "us-gaap", concept: "PaymentsToAcquirePropertyPlantAndEquipment", duration: true},
+			{taxonomy: "us-gaap", concept: "PaymentsToAcquireProductiveAssets", duration: true},
 			{taxonomy: "ifrs-full", concept: "PurchaseOfPropertyPlantAndEquipment", duration: true},
 			{taxonomy: "ifrs-full", concept: "PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities", duration: true},
 		},
@@ -194,6 +210,18 @@ var summaryMetricDefinitions = []summaryMetricDefinition{
 		},
 	},
 	{
+		name:              "Intangible Capital",
+		intangibleCapital: true,
+	},
+	{
+		name:                    "Adjusted Invested Capital",
+		adjustedInvestedCapital: true,
+	},
+	{
+		name:         "Intangible-Adjusted ROIC",
+		adjustedROIC: true,
+	},
+	{
 		name: "Income Tax Expense",
 		concepts: []summaryConcept{
 			{taxonomy: "us-gaap", concept: "IncomeTaxExpenseBenefit", duration: true},
@@ -210,6 +238,7 @@ var summaryMetricDefinitions = []summaryMetricDefinition{
 	{
 		name: "Interest Expense",
 		concepts: []summaryConcept{
+			{taxonomy: "us-gaap", concept: "InterestExpense", duration: true},
 			{taxonomy: "us-gaap", concept: "InterestExpenseNonOperating", duration: true},
 			{taxonomy: "us-gaap", concept: "InterestAndDebtExpense", duration: true},
 			{taxonomy: "ifrs-full", concept: "FinanceCosts", duration: true},
@@ -283,6 +312,7 @@ FROM sec_facts WHERE cik = ?`, cik)
 	if len(periodEnds) == 0 {
 		periodEnds = instantPeriodEnds(facts)
 	}
+	allPeriodEnds := periodEnds
 	if len(periodEnds) > yearCount {
 		periodEnds = periodEnds[:yearCount]
 	}
@@ -314,8 +344,13 @@ FROM sec_facts WHERE cik = ?`, cik)
 						Unit:  freeCashFlow.Unit, Present: true,
 					}
 				}
+			case definition.sgaExpense:
+				metric.Values[i] = selectSGA(facts, period.End, definition.concepts)
 			case definition.name == "Debt / Borrowings":
 				metric.Values[i] = selectDebt(facts, period.End)
+			case definition.intangibleAmortization || definition.adjustedOperatingIncome ||
+				definition.intangibleCapital || definition.adjustedInvestedCapital || definition.adjustedROIC:
+				// Derived after standard facts are loaded.
 			default:
 				metric.Values[i], _ = selectSummaryFact(facts, definition.concepts, period.End)
 			}
@@ -323,6 +358,7 @@ FROM sec_facts WHERE cik = ?`, cik)
 		summary.Metrics = append(summary.Metrics, metric)
 	}
 	deriveOperatingIncome(&summary)
+	deriveIntangibleMetrics(&summary, facts, allPeriodEnds)
 	return summary, nil
 }
 
@@ -370,6 +406,341 @@ func deriveOperatingIncome(summary *FinancialSummary) {
 		}
 		operatingIncome[i] = SummaryValue{Value: value, Unit: revenue[i].Unit, Present: true}
 	}
+}
+
+var rdConcepts = []summaryConcept{
+	{taxonomy: "us-gaap", concept: "ResearchAndDevelopmentExpense", duration: true},
+	{taxonomy: "ifrs-full", concept: "ResearchAndDevelopmentExpense", duration: true},
+}
+
+var sgaConcepts = []summaryConcept{
+	{taxonomy: "us-gaap", concept: "SellingGeneralAndAdministrativeExpense", duration: true},
+	{taxonomy: "ifrs-full", concept: "SellingGeneralAndAdministrativeExpense", duration: true},
+	{taxonomy: "ifrs-full", concept: "AdministrativeExpense", duration: true},
+}
+
+func selectSGA(facts []summaryFact, periodEnd string, concepts []summaryConcept) SummaryValue {
+	if val, ok := selectSummaryFact(facts, concepts, periodEnd); ok {
+		return val
+	}
+	smConcepts := []summaryConcept{
+		{taxonomy: "us-gaap", concept: "SellingAndMarketingExpense", duration: true},
+		{taxonomy: "ifrs-full", concept: "DistributionCosts", duration: true},
+	}
+	gaConcepts := []summaryConcept{
+		{taxonomy: "us-gaap", concept: "GeneralAndAdministrativeExpense", duration: true},
+		{taxonomy: "ifrs-full", concept: "AdministrativeExpense", duration: true},
+	}
+	sm, okSM := selectSummaryFact(facts, smConcepts, periodEnd)
+	ga, okGA := selectSummaryFact(facts, gaConcepts, periodEnd)
+	if okSM && okGA && strings.EqualFold(sm.Unit, ga.Unit) {
+		return SummaryValue{
+			Value:   math.Abs(sm.Value) + math.Abs(ga.Value),
+			Unit:    sm.Unit,
+			Present: true,
+		}
+	}
+	if okSM {
+		return sm
+	}
+	if okGA {
+		return ga
+	}
+	return SummaryValue{}
+}
+
+// deriveIntangibleMetrics implements the Peters & Taylor Total Q / Damodaran
+// Intangible Capitalization model:
+// - R&D is capitalized with 5-year linear amortization (20%/yr).
+// - 30% of SG&A is capitalized with 3-year linear amortization (33.33%/yr).
+// - Intangible Capital = sum_{k=0}^4 (1 - k/5) * R&D_{t-k} + sum_{k=0}^2 (1 - k/3) * (0.30 * SG&A_{t-k}).
+// - Amortization = sum_{k=1}^5 (1/5) * R&D_{t-k} + sum_{k=1}^3 (1/3) * (0.30 * SG&A_{t-k}).
+// - Adjusted EBIT = Operating Income + R&D + 0.30 * SG&A - Amortization.
+// - Adjusted Invested Capital = Stockholders' Equity + Debt - Cash + Intangible Capital.
+// - Adjusted ROIC = Adjusted EBIT * (1 - taxRate) / Average Adjusted Invested Capital.
+func deriveIntangibleMetrics(summary *FinancialSummary, facts []summaryFact, allPeriodEnds []string) {
+	if summary == nil || len(summary.Periods) == 0 {
+		return
+	}
+	allEnds := allPeriodEnds
+	if len(allEnds) == 0 {
+		allEnds = make([]string, len(summary.Periods))
+		for j, p := range summary.Periods {
+			allEnds[j] = p.End
+		}
+	}
+
+	rdByEnd := make(map[string]SummaryValue)
+	sgaByEnd := make(map[string]SummaryValue)
+	if len(facts) > 0 {
+		for _, end := range allEnds {
+			if v, ok := selectSummaryFact(facts, rdConcepts, end); ok {
+				rdByEnd[end] = v
+			}
+			sgaVal := selectSGA(facts, end, sgaConcepts)
+			if sgaVal.Present {
+				sgaByEnd[end] = sgaVal
+			}
+		}
+	}
+
+	currency := summaryCurrency(*summary)
+	if currency == "" {
+		currency = "USD"
+	}
+
+	rdMetric := namedMetric(*summary, "Research & Development")
+	sgaMetric := namedMetric(*summary, "Selling, General & Administrative")
+	hasIntangibles := len(rdByEnd) > 0 || len(sgaByEnd) > 0
+	for _, v := range rdMetric {
+		if v.Present && math.Abs(v.Value) > 0 {
+			hasIntangibles = true
+			break
+		}
+	}
+	if !hasIntangibles {
+		for _, v := range sgaMetric {
+			if v.Present && math.Abs(v.Value) > 0 {
+				hasIntangibles = true
+				break
+			}
+		}
+	}
+	if !hasIntangibles {
+		return
+	}
+
+	getRD := func(periodIdx, k int) (float64, bool) {
+		targetIdx := periodIdx + k
+		if targetIdx < len(allEnds) {
+			end := allEnds[targetIdx]
+			if v, ok := rdByEnd[end]; ok && v.Present {
+				return math.Abs(v.Value), true
+			}
+		}
+		if targetIdx < len(rdMetric) && rdMetric[targetIdx].Present {
+			return math.Abs(rdMetric[targetIdx].Value), true
+		}
+		return 0, false
+	}
+
+	getSGA := func(periodIdx, k int) (float64, bool) {
+		targetIdx := periodIdx + k
+		if targetIdx < len(allEnds) {
+			end := allEnds[targetIdx]
+			if v, ok := sgaByEnd[end]; ok && v.Present {
+				return math.Abs(v.Value), true
+			}
+		}
+		if targetIdx < len(sgaMetric) && sgaMetric[targetIdx].Present {
+			return math.Abs(sgaMetric[targetIdx].Value), true
+		}
+		return 0, false
+	}
+
+	n := len(summary.Periods)
+	amortValues := make([]SummaryValue, n)
+	adjEBITValues := make([]SummaryValue, n)
+	intangibleCapValues := make([]SummaryValue, n)
+	adjInvestedCapValues := make([]SummaryValue, n)
+	adjROICValues := make([]SummaryValue, n)
+
+	opIncomeMetric := namedMetric(*summary, "Operating Income")
+	equityMetric := namedMetric(*summary, "Stockholders' Equity")
+	debtMetric := namedMetric(*summary, "Debt / Borrowings")
+	cashMetric := namedMetric(*summary, "Cash & Equivalents")
+	taxMetric := namedMetric(*summary, "Income Tax Expense")
+	pretaxMetric := namedMetric(*summary, "Income Before Tax")
+
+	for i := 0; i < n; i++ {
+		// 1. R&D Capital (5-year linear life): sum_{k=0}^4 (1 - k/5) * RD_{t-k}
+		rdCap := 0.0
+		for k := 0; k < 5; k++ {
+			if v, ok := getRD(i, k); ok {
+				rdCap += (1.0 - float64(k)/5.0) * v
+			}
+		}
+
+		// 2. SG&A Capital (3-year linear life, 30% capitalized): sum_{k=0}^2 (1 - k/3) * (0.30 * SGA_{t-k})
+		sgaCap := 0.0
+		for k := 0; k < 3; k++ {
+			if v, ok := getSGA(i, k); ok {
+				sgaCap += (1.0 - float64(k)/3.0) * (0.30 * v)
+			}
+		}
+		totalIntangibleCap := rdCap + sgaCap
+		intangibleCapValues[i] = SummaryValue{
+			Value:   totalIntangibleCap,
+			Unit:    currency,
+			Present: true,
+		}
+
+		// 3. Past Amortization:
+		// R&D: sum_{k=1}^5 (1/5) * RD_{t-k}
+		rdAmort := 0.0
+		for k := 1; k <= 5; k++ {
+			if v, ok := getRD(i, k); ok {
+				rdAmort += 0.20 * v
+			}
+		}
+		// SG&A: sum_{k=1}^3 (1/3) * (0.30 * SGA_{t-k}) = sum_{k=1}^3 0.10 * SGA_{t-k}
+		sgaAmort := 0.0
+		for k := 1; k <= 3; k++ {
+			if v, ok := getSGA(i, k); ok {
+				sgaAmort += 0.10 * v
+			}
+		}
+		totalAmort := rdAmort + sgaAmort
+		amortValues[i] = SummaryValue{
+			Value:   totalAmort,
+			Unit:    currency,
+			Present: true,
+		}
+
+		// 4. Adjusted EBIT:
+		// Adjusted EBIT_t = Operating Income_t + RD_t + 0.30*SGA_t - totalAmort
+		if i < len(opIncomeMetric) && opIncomeMetric[i].Present {
+			currentRD, _ := getRD(i, 0)
+			currentSGA, _ := getSGA(i, 0)
+			adjEBIT := opIncomeMetric[i].Value + currentRD + (0.30 * currentSGA) - totalAmort
+			adjEBITValues[i] = SummaryValue{
+				Value:   adjEBIT,
+				Unit:    opIncomeMetric[i].Unit,
+				Present: true,
+			}
+		}
+
+		// 5. Adjusted Invested Capital:
+		// Invested Capital = Equity + Debt - Cash + Intangible Capital
+		if i < len(equityMetric) && equityMetric[i].Present {
+			debt := 0.0
+			if i < len(debtMetric) && debtMetric[i].Present {
+				debt = debtMetric[i].Value
+			}
+			cash := 0.0
+			if i < len(cashMetric) && cashMetric[i].Present {
+				cash = cashMetric[i].Value
+			}
+			adjInvestedCap := equityMetric[i].Value + debt - cash + totalIntangibleCap
+			adjInvestedCapValues[i] = SummaryValue{
+				Value:   adjInvestedCap,
+				Unit:    equityMetric[i].Unit,
+				Present: true,
+			}
+		}
+	}
+
+	for i := 0; i < n; i++ {
+		if !adjEBITValues[i].Present || !adjInvestedCapValues[i].Present {
+			continue
+		}
+		avgCap := adjInvestedCapValues[i].Value
+		if i+1 < n && adjInvestedCapValues[i+1].Present {
+			avgCap = (adjInvestedCapValues[i].Value + adjInvestedCapValues[i+1].Value) / 2.0
+		}
+		if avgCap <= 0 {
+			continue
+		}
+		taxRate := 0.21
+		if i < len(taxMetric) && i < len(pretaxMetric) && taxMetric[i].Present && pretaxMetric[i].Present &&
+			pretaxMetric[i].Value > 0 {
+			observed := math.Abs(taxMetric[i].Value) / pretaxMetric[i].Value
+			if observed >= 0 && observed <= 0.50 {
+				taxRate = observed
+			}
+		}
+		adjROIC := (adjEBITValues[i].Value * (1.0 - taxRate)) / avgCap
+		if finite(adjROIC) {
+			adjROICValues[i] = SummaryValue{
+				Value:   adjROIC,
+				Unit:    "%",
+				Present: true,
+			}
+		}
+	}
+
+	setOrAppendMetric(summary, "Amortization of Intangibles", amortValues)
+	setOrAppendMetric(summary, "Adjusted Operating Income", adjEBITValues)
+	setOrAppendMetric(summary, "Intangible Capital", intangibleCapValues)
+	setOrAppendMetric(summary, "Adjusted Invested Capital", adjInvestedCapValues)
+	setOrAppendMetric(summary, "Intangible-Adjusted ROIC", adjROICValues)
+}
+
+func setOrAppendMetric(summary *FinancialSummary, name string, values []SummaryValue) {
+	for i := range summary.Metrics {
+		if summary.Metrics[i].Name == name {
+			summary.Metrics[i].Values = values
+			return
+		}
+	}
+	summary.Metrics = append(summary.Metrics, SummaryMetric{Name: name, Values: values})
+}
+
+// IntangiblesResult holds intangible capitalization and profitability metrics.
+type IntangiblesResult struct {
+	Periods               []SummaryPeriod
+	Currency              string
+	IntangibleCapital     []SummaryValue
+	IntangibleAmort       []SummaryValue
+	AdjustedEBIT          []SummaryValue
+	AdjustedInvestedCap   []SummaryValue
+	AdjustedROIC          []SummaryValue
+	AdjustedOwnerEarnings []SummaryValue
+}
+
+// CalculateIntangibles returns the Peters & Taylor / Damodaran intangible metrics
+// for the given financial summary.
+func CalculateIntangibles(summary FinancialSummary) IntangiblesResult {
+	deriveIntangibleMetrics(&summary, nil, nil)
+	currency := summaryCurrency(summary)
+	if currency == "" {
+		currency = "USD"
+	}
+	res := IntangiblesResult{
+		Periods:             summary.Periods,
+		Currency:            currency,
+		IntangibleCapital:   namedMetric(summary, "Intangible Capital"),
+		IntangibleAmort:     namedMetric(summary, "Amortization of Intangibles"),
+		AdjustedEBIT:        namedMetric(summary, "Adjusted Operating Income"),
+		AdjustedInvestedCap: namedMetric(summary, "Adjusted Invested Capital"),
+		AdjustedROIC:        namedMetric(summary, "Intangible-Adjusted ROIC"),
+	}
+	ownerMetric := namedMetric(summary, "SBC-Adjusted FCF Proxy")
+	fcfMetric := namedMetric(summary, "Free Cash Flow")
+	rdMetric := namedMetric(summary, "Research & Development")
+	sgaMetric := namedMetric(summary, "Selling, General & Administrative")
+	n := len(summary.Periods)
+	res.AdjustedOwnerEarnings = make([]SummaryValue, n)
+	for i := 0; i < n; i++ {
+		owner := SummaryValue{}
+		if i < len(ownerMetric) && ownerMetric[i].Present {
+			owner = ownerMetric[i]
+		} else if i < len(fcfMetric) && fcfMetric[i].Present {
+			owner = fcfMetric[i]
+		}
+		if !owner.Present {
+			continue
+		}
+		rdVal := 0.0
+		if i < len(rdMetric) && rdMetric[i].Present {
+			rdVal = math.Abs(rdMetric[i].Value)
+		}
+		sgaVal := 0.0
+		if i < len(sgaMetric) && sgaMetric[i].Present {
+			sgaVal = math.Abs(sgaMetric[i].Value)
+		}
+		amortVal := 0.0
+		if i < len(res.IntangibleAmort) && res.IntangibleAmort[i].Present {
+			amortVal = res.IntangibleAmort[i].Value
+		}
+		growthInvestment := math.Max(0, (rdVal+0.30*sgaVal)-amortVal)
+		res.AdjustedOwnerEarnings[i] = SummaryValue{
+			Value:   owner.Value + growthInvestment,
+			Unit:    owner.Unit,
+			Present: true,
+		}
+	}
+	return res
 }
 
 func annualPeriodEnds(facts []summaryFact) []string {
@@ -463,7 +834,15 @@ func matchingInstantPeriod(factEnd, periodEnd string, allowSameFYYear bool) bool
 	if factEnd == periodEnd {
 		return true
 	}
-	return allowSameFYYear && len(factEnd) >= 4 && len(periodEnd) >= 4 && factEnd[:4] == periodEnd[:4]
+	if !allowSameFYYear {
+		return false
+	}
+	// DEI EntityCommonStockSharesOutstanding is dated as of the 10-K cover page,
+	// typically 15 to 90 days after fiscal year-end.
+	if periodDistance(factEnd, periodEnd) <= 105 {
+		return true
+	}
+	return len(factEnd) >= 4 && len(periodEnd) >= 4 && factEnd[:4] == periodEnd[:4]
 }
 
 func betterSummaryFact(candidate, current summaryFact, periodEnd string) bool {
@@ -658,11 +1037,14 @@ func WriteFinancialSummary(output io.Writer, summary FinancialSummary) error {
 	if err := writer.Flush(); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintln(output, "Free cash flow = operating cash flow − capital expenditure. SBC-adjusted FCF proxy = free cash flow − stock-based compensation; it is not a GAAP metric. Shares use period-end outstanding when available; otherwise diluted weighted-average shares.")
+	_, err := fmt.Fprintln(output, "Free cash flow = operating cash flow − capital expenditure. SBC-adjusted FCF proxy = free cash flow − stock-based compensation; it is not a GAAP metric. Shares use period-end outstanding when available; otherwise diluted weighted-average shares. Intangibles capitalized using Peters & Taylor / Damodaran model: R&D amortized linearly over 5 years, 30% of SG&A over 3 years; Adjusted EBIT = Operating Income + R&D + 30% SG&A − Amortization.")
 	return err
 }
 
 func formatSummaryValue(value float64, unit string) string {
+	if unit == "%" {
+		return fmt.Sprintf("%.1f%%", value*100)
+	}
 	magnitude := math.Abs(value)
 	divisor := 1.0
 	suffix := ""
