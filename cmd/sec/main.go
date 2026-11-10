@@ -34,6 +34,8 @@ Commands:
   dcf TICKER [options]        Estimate intrinsic value from SEC facts
   arbitrage [options]         Rank quality compounders against implied growth
   gaap-arbitrage [options]    Screen modern GAAP arbitrage (intangible-capitalized value)
+  audit [--gaps-only]         Scan the database and report missing facts
+  audit TICKER                Deep-dive diagnostic on a company to discover raw tags
   read TICKER                 Browse and read saved filings
   list                        List companies in the shared database
   export TICKER --format FMT  Export saved facts as csv or json
@@ -89,6 +91,8 @@ func run(parent context.Context, args []string, output, errorOutput io.Writer) e
 		return runArbitrage(parent, args, output, errorOutput)
 	case "gaap-arbitrage", "modern-value", "modern", "intangible":
 		return runModernGAAPArbitrage(parent, args, output, errorOutput)
+	case "audit":
+		return runAudit(parent, args, output, errorOutput)
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", command, usage)
 	}
@@ -506,7 +510,7 @@ func valuationInput(values map[string]float64, ticker string) float64 {
 
 func runModernGAAPArbitrage(parent context.Context, args []string, output, errorOutput io.Writer) error {
 	flags := flag.NewFlagSet("gaap-arbitrage", flag.ContinueOnError)
-	setFlagUsage(flags, errorOutput, "usage: sec gaap-arbitrage [--prices FILE] [--fetch-prices] [--min-adj-roic 15] [--min-yield 3.5] [--surging] [--screen-expensive] [--max-gaap-roic PCT] [--sort yield|roic|spread|score] [--universe FILE] [--years N] [--data-dir DIR]")
+	setFlagUsage(flags, errorOutput, "usage: sec gaap-arbitrage [--prices FILE] [--fetch-prices] [--min-adj-roic 15] [--min-yield 3.5] [--surging] [--screen-expensive] [--max-gaap-roic PCT] [--sort yield|roic|spread|score] [--include-financials] [--universe FILE] [--years N] [--data-dir DIR]")
 	pricesFile := flags.String("prices", "", "CSV/TSV or JSON file with ticker prices or market caps")
 	fetchPrices := flags.Bool("fetch-prices", false, "fetch live Yahoo Finance quotes (Stooq fallback) for candidates missing from --prices")
 	minAdjROIC := flags.Float64("min-adj-roic", 15.0, "minimum Intangible-Adjusted ROIC in percent")
@@ -515,11 +519,12 @@ func runModernGAAPArbitrage(parent context.Context, args []string, output, error
 	screenExpensive := flags.Bool("screen-expensive", false, "require company to appear expensive or unprofitable under GAAP (P/E >= 25, loss, or ROIC spread >= 5%)")
 	maxGAAPROIC := flags.Float64("max-gaap-roic", 0.0, "optional ceiling on standard GAAP ROIC in percent to isolate distorted firms")
 	sortBy := flags.String("sort", "yield", "sort table by: yield, roic, spread, or score")
+	includeFinancials := flags.Bool("include-financials", false, "include financial-sector SIC codes 6000-6799 (excluded by default)")
 	universeFile := flags.String("universe", "", "optional file restricting screening to these tickers")
 	years := flags.Int("years", 5, "years of history to analyze")
 	dataDir := flags.String("data-dir", sqlite.DefaultDirectory(), "directory containing the shared SQLite database")
 
-	if err := parseCommandFlags(flags, args, "prices", "min-adj-roic", "min-yield", "max-gaap-roic", "sort", "universe", "years", "data-dir"); err != nil {
+	if err := parseCommandFlags(flags, args, "prices", "min-adj-roic", "min-yield", "max-gaap-roic", "sort", "include-financials", "universe", "years", "data-dir"); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
@@ -599,6 +604,7 @@ func runModernGAAPArbitrage(parent context.Context, args []string, output, error
 			MaxGAAPROIC:          *maxGAAPROIC / 100.0,
 			Years:                *years,
 			SortBy:               *sortBy,
+			IncludeFinancials:    *includeFinancials,
 		}
 
 		candidates, err := store.ScreenModernGAAPArbitrage(ctx, tickers, marketCaps, prices, filter)
@@ -620,6 +626,46 @@ func runModernGAAPArbitrage(parent context.Context, args []string, output, error
 			return err
 		}
 		return sec.WriteModernGAAPTable(output, candidates)
+	})
+}
+
+func runAudit(parent context.Context, args []string, output, errorOutput io.Writer) error {
+	flags := flag.NewFlagSet("audit", flag.ContinueOnError)
+	setFlagUsage(flags, errorOutput, "usage: sec audit [TICKER] [--gaps-only] [--data-dir DIR]")
+	gapsOnly := flags.Bool("gaps-only", false, "only list companies that have missing data")
+	dataDir := flags.String("data-dir", sqlite.DefaultDirectory(), "directory containing the shared SQLite database")
+
+	if err := parseCommandFlags(flags, args, "gaps-only", "data-dir"); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+
+	databasePath := sharedDatabasePath(*dataDir)
+	positionals := flags.Args()
+
+	// If a specific ticker is passed: run deep diagnostic
+	if len(positionals) == 1 {
+		ticker, err := commandTicker(positionals)
+		if err != nil {
+			return err
+		}
+		return withExistingStore(parent, databasePath, ticker, func(ctx context.Context, store *sec.Store) error {
+			return store.DiagnoseTicker(ctx, ticker, output)
+		})
+	}
+	if len(positionals) > 1 {
+		return errors.New("audit accepts at most one ticker")
+	}
+
+	// Full universe scan
+	return withExistingStoreTimeout(parent, databasePath, "", 5*time.Minute, func(ctx context.Context, store *sec.Store) error {
+		results, err := store.AuditDatabase(ctx)
+		if err != nil {
+			return err
+		}
+		return sec.WriteAuditSummary(output, results, *gapsOnly)
 	})
 }
 

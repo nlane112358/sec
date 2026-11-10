@@ -524,29 +524,58 @@ func (s *Store) ScreenExpectationsArbitrage(ctx context.Context, ranked []Ranked
 
 // LatestShareCount returns the latest positive SEC share count across the saved
 // instant and diluted weighted-average share facts for a company.
+// When two share-count facts have the same (period_end, filing_date), it picks the
+// larger value (ORDER BY ... value DESC). It also cross-checks that Shares Outstanding
+// is at least 50% of Diluted Weighted Average Shares to avoid picking tiny Class B/C share
+// dimensions from dual-class structures (e.g. ERIE).
 func (s *Store) LatestShareCount(ctx context.Context, ticker string) (float64, bool) {
 	cik, _, _, err := s.companyForTicker(ctx, ticker)
 	if err != nil {
 		return 0, false
 	}
-	var shares float64
-	err = s.db.QueryRowContext(ctx, `
+	var outstanding, diluted float64
+	_ = s.db.QueryRowContext(ctx, `
 		SELECT value FROM sec_facts
 		WHERE cik = ?
 		  AND concept IN (
 		      'EntityCommonStockSharesOutstanding',
+		      'CommonStockSharesOutstanding',
+		      'NumberOfSharesOutstanding'
+		  )
+		  AND unit = 'shares'
+		  AND value > 0
+		ORDER BY period_end DESC, filing_date DESC, value DESC
+		LIMIT 1`, cik).Scan(&outstanding)
+
+	_ = s.db.QueryRowContext(ctx, `
+		SELECT value FROM sec_facts
+		WHERE cik = ?
+		  AND concept IN (
 		      'WeightedAverageNumberOfDilutedSharesOutstanding',
-		      'NumberOfSharesOutstanding',
+		      'WeightedAverageNumberOfSharesOutstandingDiluted',
 		      'DilutedWeightedAverageNumberOfOrdinarySharesOutstanding'
 		  )
 		  AND unit = 'shares'
 		  AND value > 0
-		ORDER BY period_end DESC, filing_date DESC
-		LIMIT 1`, cik).Scan(&shares)
-	if err != nil || !finite(shares) || shares <= 0 {
-		return 0, false
+		ORDER BY period_end DESC, filing_date DESC, value DESC
+		LIMIT 1`, cik).Scan(&diluted)
+
+	hasOutstanding := finite(outstanding) && outstanding > 0
+	hasDiluted := finite(diluted) && diluted > 0
+
+	if hasOutstanding && hasDiluted {
+		if outstanding < 0.5*diluted {
+			return diluted, true
+		}
+		return outstanding, true
 	}
-	return shares, true
+	if hasOutstanding {
+		return outstanding, true
+	}
+	if hasDiluted {
+		return diluted, true
+	}
+	return 0, false
 }
 
 func valuationForTicker(values map[string]float64, ticker string) float64 {

@@ -149,6 +149,113 @@ func TestModernGAAPFilterSorting(t *testing.T) {
 	}
 }
 
+func TestExcludeFinancialsByDefault(t *testing.T) {
+	ctx := context.Background()
+	store, cleanup := newTestStore(t)
+	defer cleanup()
+
+	// Co TECH: Nonfinancial (SIC 7372)
+	saveCompanyWithFacts(t, store, "TECH_C", "Tech Gamma Inc", "7372", "Prepackaged Software", map[string]float64{
+		"Revenues":                               1000,
+		"OperatingIncomeLoss":                    200,
+		"ResearchAndDevelopmentExpense":          300,
+		"SellingGeneralAndAdministrativeExpense": 100,
+		"StockholdersEquity":                     800,
+		"NetCashProvidedByUsedInOperatingActivities": 400,
+		"CashAndCashEquivalentsAtCarryingValue":      100,
+		"EntityCommonStockSharesOutstanding":         50,
+	})
+
+	// Co FIN: Financial (SIC 6211 - Security Brokers & Dealers, e.g. IBKR)
+	saveCompanyWithFacts(t, store, "FIN_B", "Financial Broker Corp", "6211", "Security Brokers", map[string]float64{
+		"Revenues":                               1000,
+		"OperatingIncomeLoss":                    300,
+		"SellingGeneralAndAdministrativeExpense": 100,
+		"StockholdersEquity":                     800,
+		"NetCashProvidedByUsedInOperatingActivities": 500,
+		"CashAndCashEquivalentsAtCarryingValue":      100,
+		"EntityCommonStockSharesOutstanding":         50,
+	})
+
+	// 1. By default: IncludeFinancials is false -> FIN_B must be excluded
+	candidates, err := store.ScreenModernGAAPArbitrage(ctx, []string{"TECH_C", "FIN_B"}, nil, nil, ModernGAAPFilter{
+		MinAdjustedROIC: 0.10,
+		MinRevenue:      500,
+		Years:           3,
+	})
+	if err != nil {
+		t.Fatalf("ScreenModernGAAPArbitrage error: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].Ticker != "TECH_C" {
+		t.Fatalf("expected only TECH_C by default (excluding SIC 6000-6799), got %d candidates: %+v", len(candidates), candidates)
+	}
+
+	// 2. When IncludeFinancials is true -> FIN_B is included
+	candidatesWithFin, err := store.ScreenModernGAAPArbitrage(ctx, []string{"TECH_C", "FIN_B"}, nil, nil, ModernGAAPFilter{
+		MinAdjustedROIC:   0.10,
+		MinRevenue:        500,
+		Years:             3,
+		IncludeFinancials: true,
+	})
+	if err != nil {
+		t.Fatalf("ScreenModernGAAPArbitrage with financials error: %v", err)
+	}
+	if len(candidatesWithFin) != 2 {
+		t.Fatalf("expected both TECH_C and FIN_B when IncludeFinancials is true, got %d", len(candidatesWithFin))
+	}
+}
+
+func TestLatestShareCountDualClass(t *testing.T) {
+	ctx := context.Background()
+	store, cleanup := newTestStore(t)
+	defer cleanup()
+
+	// Seed company with dual-class structure like ERIE:
+	// Class A: 46.2M shares
+	// Class B: 2,542 shares
+	// Both filed on same date and period
+	cik := "0000922621"
+	ticker := "ERIE_TEST"
+	_, err := store.db.ExecContext(ctx, `INSERT INTO sec_companies (cik, company_name, requested_ticker, sic, sic_description)
+VALUES (?, 'Erie Test Co', ?, '6411', 'Insurance Agents')`, cik, ticker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.db.ExecContext(ctx, `INSERT INTO sec_tickers (cik, ticker) VALUES (?, ?)`, cik, ticker)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert Class B voting shares (2,542)
+	_, err = store.db.ExecContext(ctx, `INSERT INTO sec_facts (cik, company_name, ticker, taxonomy, concept, label, unit, value, period_start, period_end, filing_date, form, accession_number)
+VALUES (?, 'Erie Test Co', ?, 'dei', 'EntityCommonStockSharesOutstanding', 'Shares', 'shares', 2542, '', '2025-12-31', '2026-02-20', '10-K', 'acc-erie-01')`, cik, ticker)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert Class A shares (46,200,000) on same filing date and period end
+	_, err = store.db.ExecContext(ctx, `INSERT INTO sec_facts (cik, company_name, ticker, taxonomy, concept, label, unit, value, period_start, period_end, filing_date, form, accession_number)
+VALUES (?, 'Erie Test Co', ?, 'dei', 'EntityCommonStockSharesOutstanding', 'Shares', 'shares', 46200000, '', '2025-12-31', '2026-02-20', '10-K', 'acc-erie-02')`, cik, ticker)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Also insert diluted shares (46,200,000)
+	_, err = store.db.ExecContext(ctx, `INSERT INTO sec_facts (cik, company_name, ticker, taxonomy, concept, label, unit, value, period_start, period_end, filing_date, form, accession_number)
+VALUES (?, 'Erie Test Co', ?, 'us-gaap', 'WeightedAverageNumberOfDilutedSharesOutstanding', 'Diluted', 'shares', 46200000, '2025-01-01', '2025-12-31', '2026-02-20', '10-K', 'acc-erie-01')`, cik, ticker)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	shares, ok := store.LatestShareCount(ctx, ticker)
+	if !ok {
+		t.Fatal("expected LatestShareCount to find shares")
+	}
+	if shares != 46200000 {
+		t.Fatalf("expected 46.2M shares (larger Class A value), got %v", shares)
+	}
+}
+
 func saveCompanyWithFacts(t *testing.T, store *Store, ticker, name, sic, sicDesc string, annualData map[string]float64) {
 	ctx := context.Background()
 	cik := "000" + ticker

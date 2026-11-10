@@ -246,18 +246,25 @@ var concepts = []string{
 	"IncomeTaxExpenseBenefit",
 	"InterestExpense",
 	"InterestExpenseNonOperating",
+	"InterestExpenseNonoperating",
 	"InterestAndDebtExpense",
 	"IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
 	"NetIncomeLoss",
+	"OperatingCostsAndExpenses",
+	"CostsAndExpenses",
 	"DepreciationDepletionAndAmortization",
+	"DepreciationAndAmortization",
 	"PaymentsToAcquireProductiveAssets",
 	"PaymentsToAcquirePropertyPlantAndEquipment",
 	"NetCashProvidedByUsedInOperatingActivities",
 	"ShareBasedCompensation",
 	"AllocatedShareBasedCompensationExpense",
 	"StockholdersEquity",
+	"StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
 	"EntityCommonStockSharesOutstanding",
+	"CommonStockSharesOutstanding",
 	"WeightedAverageNumberOfDilutedSharesOutstanding",
+	"WeightedAverageNumberOfSharesOutstandingDiluted",
 }
 
 var ifrsConcepts = []string{
@@ -298,20 +305,15 @@ func ExtractFacts(data *CompanyFacts, cik string) []FinancialFact {
 	}
 
 	for _, taxonomy := range []string{"us-gaap", "ifrs-full", "dei"} {
-		definitions := data.Facts[taxonomy]
-		taxonomyConcepts := concepts
-		if taxonomy == "ifrs-full" {
-			taxonomyConcepts = make([]string, 0, len(concepts)+len(ifrsConcepts))
-			taxonomyConcepts = append(taxonomyConcepts, concepts...)
-			taxonomyConcepts = append(taxonomyConcepts, ifrsConcepts...)
+		definitions, ok := data.Facts[taxonomy]
+		if !ok {
+			continue
 		}
-		for _, concept := range taxonomyConcepts {
-			def, ok := definitions[concept]
-			if !ok {
-				continue
-			}
-
+		for concept, def := range definitions {
 			for unit, entries := range def.Units {
+				if !isAllowedFactUnit(unit) {
+					continue
+				}
 				for _, e := range entries {
 					if !secFilingForm(e.Form) {
 						continue
@@ -350,6 +352,24 @@ func ExtractFacts(data *CompanyFacts, cik string) []FinancialFact {
 	})
 
 	return out
+}
+
+func isAllowedFactUnit(unit string) bool {
+	u := strings.ToLower(strings.TrimSpace(unit))
+	if u == "usd" || u == "shares" || u == "pure" || u == "usd/shares" {
+		return true
+	}
+	if len(u) == 3 {
+		allAlpha := true
+		for _, r := range u {
+			if r < 'a' || r > 'z' {
+				allAlpha = false
+				break
+			}
+		}
+		return allAlpha
+	}
+	return false
 }
 
 func secFilingForm(form string) bool {

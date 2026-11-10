@@ -255,10 +255,6 @@ func dcfBalanceSheet(summary FinancialSummary, debtOverride *float64) (cash, deb
 		return
 	}
 	hasReportedDebt := len(debtValues) > 0 && debtValues[0].Present
-	if !hasReportedDebt && debtOverride == nil {
-		err = fmt.Errorf("latest annual debt or borrowings are missing")
-		return
-	}
 	if len(sharesValues) == 0 || !sharesValues[0].Present || sharesValues[0].Value <= 0 {
 		err = fmt.Errorf("latest shares outstanding are missing or invalid")
 		return
@@ -279,13 +275,16 @@ func dcfBalanceSheet(summary FinancialSummary, debtOverride *float64) (cash, deb
 			err = fmt.Errorf("cash and reported debt must use the same currency unit")
 			return
 		}
-	} else {
+	} else if hasReportedDebt {
 		if !strings.EqualFold(currency, debtValues[0].Unit) {
 			err = fmt.Errorf("cash and debt must use the same currency unit")
 			return
 		}
 		debt = debtValues[0].Value
 		debtSource = "SEC-reported debt"
+	} else {
+		debt = 0.0
+		debtSource = "assumed zero (unlevered / no reported debt)"
 	}
 	if !strings.EqualFold(sharesValues[0].Unit, "shares") {
 		err = fmt.Errorf("shares outstanding must use shares as its unit")

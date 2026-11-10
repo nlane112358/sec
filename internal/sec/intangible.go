@@ -56,6 +56,7 @@ type ModernGAAPFilter struct {
 	MinRevenue           float64
 	Years                int
 	SortBy               string
+	IncludeFinancials    bool
 }
 
 // ScreenModernGAAPArbitrage screens companies using the Peters & Taylor Total Q /
@@ -97,6 +98,10 @@ func (s *Store) ScreenModernGAAPArbitrage(ctx context.Context, tickers []string,
 	for _, company := range companies {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+
+		if !filter.IncludeFinancials && sectorFromSIC(company.SIC) == "Financials" {
+			continue
 		}
 
 		summary, err := s.FinancialSummary(ctx, filter.Years, company.Ticker)

@@ -72,9 +72,17 @@ var summaryMetricDefinitions = []summaryMetricDefinition{
 		name: "Revenue",
 		concepts: []summaryConcept{
 			{taxonomy: "us-gaap", concept: "RevenueFromContractWithCustomerExcludingAssessedTax", duration: true},
+			{taxonomy: "us-gaap", concept: "RevenueFromContractWithCustomerIncludingAssessedTax", duration: true},
 			{taxonomy: "us-gaap", concept: "Revenues", duration: true},
 			{taxonomy: "us-gaap", concept: "SalesRevenueNet", duration: true},
+			{taxonomy: "us-gaap", concept: "SalesRevenueServicesNet", duration: true},
+			{taxonomy: "us-gaap", concept: "TotalRevenuesAndOtherIncome", duration: true},
+			{taxonomy: "us-gaap", concept: "RegulatedAndUnregulatedOperatingRevenue", duration: true},
+			{taxonomy: "us-gaap", concept: "RealEstateRevenueNet", duration: true},
+			{taxonomy: "us-gaap", concept: "PremiumsEarnedNet", duration: true},
+			{taxonomy: "us-gaap", concept: "InterestAndDividendIncomeOperating", duration: true},
 			{taxonomy: "ifrs-full", concept: "Revenue", duration: true},
+			{taxonomy: "ifrs-full", concept: "RevenueFromContractsWithCustomers", duration: true},
 		},
 	},
 	{
@@ -82,6 +90,9 @@ var summaryMetricDefinitions = []summaryMetricDefinition{
 		concepts: []summaryConcept{
 			{taxonomy: "us-gaap", concept: "OperatingIncomeLoss", duration: true},
 			{taxonomy: "ifrs-full", concept: "ProfitLossFromOperatingActivities", duration: true},
+			{taxonomy: "us-gaap", concept: "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments", duration: true},
+			{taxonomy: "us-gaap", concept: "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest", duration: true},
+			{taxonomy: "ifrs-full", concept: "ProfitLossBeforeTax", duration: true},
 		},
 	},
 	{
@@ -90,6 +101,8 @@ var summaryMetricDefinitions = []summaryMetricDefinition{
 			{taxonomy: "us-gaap", concept: "CostOfRevenue", duration: true},
 			{taxonomy: "us-gaap", concept: "CostOfGoodsAndServicesSold", duration: true},
 			{taxonomy: "us-gaap", concept: "CostOfGoodsSold", duration: true},
+			{taxonomy: "us-gaap", concept: "OperatingCostsAndExpenses", duration: true},
+			{taxonomy: "us-gaap", concept: "CostsAndExpenses", duration: true},
 			{taxonomy: "ifrs-full", concept: "CostOfSales", duration: true},
 		},
 	},
@@ -106,6 +119,11 @@ var summaryMetricDefinitions = []summaryMetricDefinition{
 		name: "Research & Development",
 		concepts: []summaryConcept{
 			{taxonomy: "us-gaap", concept: "ResearchAndDevelopmentExpense", duration: true},
+			{taxonomy: "us-gaap", concept: "ResearchAndDevelopmentExpenseSoftwareExcludingAcquiredInProcessCost", duration: true},
+			{taxonomy: "us-gaap", concept: "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost", duration: true},
+			{taxonomy: "us-gaap", concept: "ResearchDevelopmentAndEngineeringExpense", duration: true},
+			{taxonomy: "us-gaap", concept: "TechnologyAndDevelopmentExpense", duration: true},
+			{taxonomy: "us-gaap", concept: "SoftwareAndSoftwareDevelopmentCosts", duration: true},
 			{taxonomy: "ifrs-full", concept: "ResearchAndDevelopmentExpense", duration: true},
 		},
 	},
@@ -129,13 +147,17 @@ var summaryMetricDefinitions = []summaryMetricDefinition{
 		name: "Net Income",
 		concepts: []summaryConcept{
 			{taxonomy: "us-gaap", concept: "NetIncomeLoss", duration: true},
+			{taxonomy: "us-gaap", concept: "NetIncomeLossAvailableToCommonStockholdersBasic", duration: true},
+			{taxonomy: "us-gaap", concept: "ProfitLoss", duration: true},
 			{taxonomy: "ifrs-full", concept: "ProfitLoss", duration: true},
+			{taxonomy: "ifrs-full", concept: "ProfitLossAttributableToOwnersOfParent", duration: true},
 		},
 	},
 	{
 		name: "Operating Cash Flow",
 		concepts: []summaryConcept{
 			{taxonomy: "us-gaap", concept: "NetCashProvidedByUsedInOperatingActivities", duration: true},
+			{taxonomy: "us-gaap", concept: "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations", duration: true},
 			{taxonomy: "ifrs-full", concept: "CashFlowsFromUsedInOperatingActivities", duration: true},
 		},
 	},
@@ -144,14 +166,30 @@ var summaryMetricDefinitions = []summaryMetricDefinition{
 		concepts: []summaryConcept{
 			{taxonomy: "us-gaap", concept: "PaymentsToAcquirePropertyPlantAndEquipment", duration: true},
 			{taxonomy: "us-gaap", concept: "PaymentsToAcquireProductiveAssets", duration: true},
+			{taxonomy: "us-gaap", concept: "PaymentsToAcquireOtherPropertyPlantAndEquipment", duration: true},
+			{taxonomy: "us-gaap", concept: "PaymentsToAcquireOtherProductiveAssets", duration: true},
+			{taxonomy: "us-gaap", concept: "PaymentsForFlightEquipment", duration: true},
+			{taxonomy: "us-gaap", concept: "PaymentsToAcquireOilAndGasProperty", duration: true},
+			{taxonomy: "us-gaap", concept: "PaymentsToExploreAndDevelopOilAndGasProperties", duration: true},
+			{taxonomy: "us-gaap", concept: "PaymentsForOilAndGasExplorationAndDevelopment", duration: true},
+			{taxonomy: "us-gaap", concept: "PaymentsForCapitalImprovements", duration: true},
+			{taxonomy: "us-gaap", concept: "PaymentsToDevelopRealEstateAssets", duration: true},
+			{taxonomy: "us-gaap", concept: "PaymentsToAcquireRealEstate", duration: true},
+			{taxonomy: "us-gaap", concept: "PaymentsToAcquireRealEstateAssets", duration: true},
+			{taxonomy: "us-gaap", concept: "PaymentsToAcquireIntangibleAssets", duration: true},
 			{taxonomy: "ifrs-full", concept: "PurchaseOfPropertyPlantAndEquipment", duration: true},
 			{taxonomy: "ifrs-full", concept: "PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities", duration: true},
+			{taxonomy: "us-gaap", concept: "PaymentsForProceedsFromOtherInvestingActivities", duration: true},
 		},
 	},
 	{
 		name: "Depreciation & Amortization",
 		concepts: []summaryConcept{
 			{taxonomy: "us-gaap", concept: "DepreciationDepletionAndAmortization", duration: true},
+			{taxonomy: "us-gaap", concept: "DepreciationAndAmortization", duration: true},
+			{taxonomy: "us-gaap", concept: "Depreciation", duration: true},
+			{taxonomy: "us-gaap", concept: "AmortizationOfIntangibleAssets", duration: true},
+			{taxonomy: "us-gaap", concept: "DepreciationAmortizationAndAccretionNet", duration: true},
 			{taxonomy: "ifrs-full", concept: "DepreciationAndAmortisationExpense", duration: true},
 		},
 	},
@@ -175,6 +213,11 @@ var summaryMetricDefinitions = []summaryMetricDefinition{
 		name: "Cash & Equivalents",
 		concepts: []summaryConcept{
 			{taxonomy: "us-gaap", concept: "CashAndCashEquivalentsAtCarryingValue"},
+			{taxonomy: "us-gaap", concept: "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"},
+			{taxonomy: "us-gaap", concept: "CashCashEquivalentsAndShortTermInvestments"},
+			{taxonomy: "us-gaap", concept: "CashAndShortTermInvestments"},
+			{taxonomy: "us-gaap", concept: "CashAndDueFromBanks"},
+			{taxonomy: "us-gaap", concept: "Cash"},
 			{taxonomy: "ifrs-full", concept: "CashAndCashEquivalents"},
 		},
 	},
@@ -206,7 +249,13 @@ var summaryMetricDefinitions = []summaryMetricDefinition{
 		name: "Stockholders' Equity",
 		concepts: []summaryConcept{
 			{taxonomy: "us-gaap", concept: "StockholdersEquity"},
+			{taxonomy: "us-gaap", concept: "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"},
+			{taxonomy: "us-gaap", concept: "CommonStockholdersEquity"},
+			{taxonomy: "us-gaap", concept: "PartnersCapital"},
+			{taxonomy: "us-gaap", concept: "PartnersCapitalIncludingPortionAttributableToNoncontrollingInterest"},
 			{taxonomy: "ifrs-full", concept: "Equity"},
+			{taxonomy: "ifrs-full", concept: "EquityAttributableToOwnersOfParent"},
+			{taxonomy: "ifrs-full", concept: "EquityAttributableToParent"},
 		},
 	},
 	{
@@ -239,8 +288,11 @@ var summaryMetricDefinitions = []summaryMetricDefinition{
 		name: "Interest Expense",
 		concepts: []summaryConcept{
 			{taxonomy: "us-gaap", concept: "InterestExpense", duration: true},
+			{taxonomy: "us-gaap", concept: "InterestExpenseNonoperating", duration: true},
 			{taxonomy: "us-gaap", concept: "InterestExpenseNonOperating", duration: true},
 			{taxonomy: "us-gaap", concept: "InterestAndDebtExpense", duration: true},
+			{taxonomy: "us-gaap", concept: "InterestExpenseDebt", duration: true},
+			{taxonomy: "us-gaap", concept: "InterestPaidNet", duration: true},
 			{taxonomy: "ifrs-full", concept: "FinanceCosts", duration: true},
 		},
 	},
@@ -248,8 +300,11 @@ var summaryMetricDefinitions = []summaryMetricDefinition{
 		name: "Shares Outstanding",
 		concepts: []summaryConcept{
 			{taxonomy: "dei", concept: "EntityCommonStockSharesOutstanding", allowSameFYYear: true},
+			{taxonomy: "us-gaap", concept: "CommonStockSharesOutstanding", allowSameFYYear: true},
 			{taxonomy: "ifrs-full", concept: "NumberOfSharesOutstanding", allowSameFYYear: true},
 			{taxonomy: "us-gaap", concept: "WeightedAverageNumberOfDilutedSharesOutstanding", duration: true},
+			{taxonomy: "us-gaap", concept: "WeightedAverageNumberOfSharesOutstandingDiluted", duration: true},
+			{taxonomy: "us-gaap", concept: "WeightedAverageNumberOfSharesOutstandingBasic", duration: true},
 			{taxonomy: "ifrs-full", concept: "DilutedWeightedAverageNumberOfOrdinarySharesOutstanding", duration: true},
 		},
 	},
@@ -257,6 +312,7 @@ var summaryMetricDefinitions = []summaryMetricDefinition{
 		name: "Diluted Weighted Average Shares",
 		concepts: []summaryConcept{
 			{taxonomy: "us-gaap", concept: "WeightedAverageNumberOfDilutedSharesOutstanding", duration: true},
+			{taxonomy: "us-gaap", concept: "WeightedAverageNumberOfSharesOutstandingDiluted", duration: true},
 			{taxonomy: "ifrs-full", concept: "DilutedWeightedAverageNumberOfOrdinarySharesOutstanding", duration: true},
 		},
 	},
@@ -334,6 +390,12 @@ FROM sec_facts WHERE cik = ?`, cik)
 						Unit:    cashFlow.Unit,
 						Present: true,
 					}
+				} else if cashFlow.Present && !capEx.Present {
+					metric.Values[i] = SummaryValue{
+						Value:   cashFlow.Value,
+						Unit:    cashFlow.Unit,
+						Present: true,
+					}
 				}
 			case definition.ownerEarnings:
 				freeCashFlow := summaryMetricValue(summary.Metrics, "Free Cash Flow", i)
@@ -342,6 +404,18 @@ FROM sec_facts WHERE cik = ?`, cik)
 					metric.Values[i] = SummaryValue{
 						Value: freeCashFlow.Value - math.Abs(sbc.Value),
 						Unit:  freeCashFlow.Unit, Present: true,
+					}
+				}
+			case definition.name == "Capital Expenditure":
+				metric.Values[i], _ = selectSummaryFact(facts, definition.concepts, period.End)
+				if !metric.Values[i].Present {
+					cashFlow := summaryMetricValue(summary.Metrics, "Operating Cash Flow", i)
+					if cashFlow.Present {
+						metric.Values[i] = SummaryValue{
+							Value:   0.0,
+							Unit:    cashFlow.Unit,
+							Present: true,
+						}
 					}
 				}
 			case definition.sgaExpense:
@@ -358,8 +432,41 @@ FROM sec_facts WHERE cik = ?`, cik)
 		summary.Metrics = append(summary.Metrics, metric)
 	}
 	deriveOperatingIncome(&summary)
+	sanitizeSharesOutstanding(&summary)
 	deriveIntangibleMetrics(&summary, facts, allPeriodEnds)
 	return summary, nil
+}
+
+// sanitizeSharesOutstanding ensures that Shares Outstanding is at least 50% of
+// Diluted Weighted Average Shares for each period, preventing dual-class edge cases
+// (e.g. ERIE picking 2,542 Class B voting shares instead of 46.2M Class A shares).
+func sanitizeSharesOutstanding(summary *FinancialSummary) {
+	if summary == nil {
+		return
+	}
+	var sharesMetric, dilutedMetric *SummaryMetric
+	for i := range summary.Metrics {
+		if summary.Metrics[i].Name == "Shares Outstanding" {
+			sharesMetric = &summary.Metrics[i]
+		} else if summary.Metrics[i].Name == "Diluted Weighted Average Shares" {
+			dilutedMetric = &summary.Metrics[i]
+		}
+	}
+	if sharesMetric == nil || dilutedMetric == nil {
+		return
+	}
+	for i := 0; i < len(summary.Periods); i++ {
+		if i >= len(sharesMetric.Values) || i >= len(dilutedMetric.Values) {
+			break
+		}
+		shares := sharesMetric.Values[i]
+		diluted := dilutedMetric.Values[i]
+		if shares.Present && diluted.Present && diluted.Value > 0 && shares.Value < 0.5*diluted.Value {
+			sharesMetric.Values[i] = diluted
+		} else if !shares.Present && diluted.Present && diluted.Value > 0 {
+			sharesMetric.Values[i] = diluted
+		}
+	}
 }
 
 // deriveOperatingIncome fills absent direct operating-income facts only when
@@ -410,6 +517,11 @@ func deriveOperatingIncome(summary *FinancialSummary) {
 
 var rdConcepts = []summaryConcept{
 	{taxonomy: "us-gaap", concept: "ResearchAndDevelopmentExpense", duration: true},
+	{taxonomy: "us-gaap", concept: "ResearchAndDevelopmentExpenseSoftwareExcludingAcquiredInProcessCost", duration: true},
+	{taxonomy: "us-gaap", concept: "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost", duration: true},
+	{taxonomy: "us-gaap", concept: "ResearchDevelopmentAndEngineeringExpense", duration: true},
+	{taxonomy: "us-gaap", concept: "TechnologyAndDevelopmentExpense", duration: true},
+	{taxonomy: "us-gaap", concept: "SoftwareAndSoftwareDevelopmentCosts", duration: true},
 	{taxonomy: "ifrs-full", concept: "ResearchAndDevelopmentExpense", duration: true},
 }
 
@@ -425,10 +537,15 @@ func selectSGA(facts []summaryFact, periodEnd string, concepts []summaryConcept)
 	}
 	smConcepts := []summaryConcept{
 		{taxonomy: "us-gaap", concept: "SellingAndMarketingExpense", duration: true},
+		{taxonomy: "us-gaap", concept: "MarketingExpense", duration: true},
+		{taxonomy: "us-gaap", concept: "MarketingAndAdvertisingExpense", duration: true},
+		{taxonomy: "us-gaap", concept: "SellingExpense", duration: true},
 		{taxonomy: "ifrs-full", concept: "DistributionCosts", duration: true},
 	}
 	gaConcepts := []summaryConcept{
 		{taxonomy: "us-gaap", concept: "GeneralAndAdministrativeExpense", duration: true},
+		{taxonomy: "us-gaap", concept: "OtherGeneralAndAdministrativeExpense", duration: true},
+		{taxonomy: "us-gaap", concept: "GeneralExpense", duration: true},
 		{taxonomy: "ifrs-full", concept: "AdministrativeExpense", duration: true},
 	}
 	sm, okSM := selectSummaryFact(facts, smConcepts, periodEnd)
@@ -472,14 +589,40 @@ func deriveIntangibleMetrics(summary *FinancialSummary, facts []summaryFact, all
 
 	rdByEnd := make(map[string]SummaryValue)
 	sgaByEnd := make(map[string]SummaryValue)
+	rdByYear := make(map[string]float64)
+	sgaByYear := make(map[string]float64)
+
 	if len(facts) > 0 {
+		for _, fact := range facts {
+			if fact.start == "" || !secFilingForm(fact.form) || !isAnnualDuration(fact.start, fact.end) {
+				continue
+			}
+			year := fact.end
+			if len(year) >= 4 {
+				year = year[:4]
+			}
+			for _, c := range rdConcepts {
+				if matchesConceptTaxonomy(fact.taxonomy, c.taxonomy) && fact.concept == c.concept && finite(fact.value) && fact.value > 0 {
+					if existing, ok := rdByYear[year]; !ok || fact.value > existing {
+						rdByYear[year] = fact.value
+					}
+					break
+				}
+			}
+		}
 		for _, end := range allEnds {
 			if v, ok := selectSummaryFact(facts, rdConcepts, end); ok {
 				rdByEnd[end] = v
+				if len(end) >= 4 {
+					rdByYear[end[:4]] = math.Abs(v.Value)
+				}
 			}
 			sgaVal := selectSGA(facts, end, sgaConcepts)
 			if sgaVal.Present {
 				sgaByEnd[end] = sgaVal
+				if len(end) >= 4 {
+					sgaByYear[end[:4]] = math.Abs(sgaVal.Value)
+				}
 			}
 		}
 	}
@@ -491,22 +634,15 @@ func deriveIntangibleMetrics(summary *FinancialSummary, facts []summaryFact, all
 
 	rdMetric := namedMetric(*summary, "Research & Development")
 	sgaMetric := namedMetric(*summary, "Selling, General & Administrative")
-	hasIntangibles := len(rdByEnd) > 0 || len(sgaByEnd) > 0
-	for _, v := range rdMetric {
-		if v.Present && math.Abs(v.Value) > 0 {
-			hasIntangibles = true
+	opIncomeMetric := namedMetric(*summary, "Operating Income")
+	hasOperatingIncome := false
+	for _, v := range opIncomeMetric {
+		if v.Present && finite(v.Value) {
+			hasOperatingIncome = true
 			break
 		}
 	}
-	if !hasIntangibles {
-		for _, v := range sgaMetric {
-			if v.Present && math.Abs(v.Value) > 0 {
-				hasIntangibles = true
-				break
-			}
-		}
-	}
-	if !hasIntangibles {
+	if !hasOperatingIncome {
 		return
 	}
 
@@ -516,6 +652,11 @@ func deriveIntangibleMetrics(summary *FinancialSummary, facts []summaryFact, all
 			end := allEnds[targetIdx]
 			if v, ok := rdByEnd[end]; ok && v.Present {
 				return math.Abs(v.Value), true
+			}
+			if len(end) >= 4 {
+				if val, ok := rdByYear[end[:4]]; ok && val > 0 {
+					return val, true
+				}
 			}
 		}
 		if targetIdx < len(rdMetric) && rdMetric[targetIdx].Present {
@@ -531,9 +672,43 @@ func deriveIntangibleMetrics(summary *FinancialSummary, facts []summaryFact, all
 			if v, ok := sgaByEnd[end]; ok && v.Present {
 				return math.Abs(v.Value), true
 			}
+			if len(end) >= 4 {
+				if val, ok := sgaByYear[end[:4]]; ok && val > 0 {
+					return val, true
+				}
+			}
 		}
 		if targetIdx < len(sgaMetric) && sgaMetric[targetIdx].Present {
 			return math.Abs(sgaMetric[targetIdx].Value), true
+		}
+		return 0, false
+	}
+
+	resolveRD := func(periodIdx, k int) (float64, bool) {
+		if v, ok := getRD(periodIdx, k); ok {
+			return v, true
+		}
+		// Interpolate if neighboring years are available to bridge single-year tag gaps
+		if k > 0 && k < 4 {
+			prev, okPrev := getRD(periodIdx, k-1)
+			next, okNext := getRD(periodIdx, k+1)
+			if okPrev && okNext {
+				return (prev + next) / 2.0, true
+			}
+		}
+		return 0, false
+	}
+
+	resolveSGA := func(periodIdx, k int) (float64, bool) {
+		if v, ok := getSGA(periodIdx, k); ok {
+			return v, true
+		}
+		if k > 0 && k < 2 {
+			prev, okPrev := getSGA(periodIdx, k-1)
+			next, okNext := getSGA(periodIdx, k+1)
+			if okPrev && okNext {
+				return (prev + next) / 2.0, true
+			}
 		}
 		return 0, false
 	}
@@ -545,7 +720,6 @@ func deriveIntangibleMetrics(summary *FinancialSummary, facts []summaryFact, all
 	adjInvestedCapValues := make([]SummaryValue, n)
 	adjROICValues := make([]SummaryValue, n)
 
-	opIncomeMetric := namedMetric(*summary, "Operating Income")
 	equityMetric := namedMetric(*summary, "Stockholders' Equity")
 	debtMetric := namedMetric(*summary, "Debt / Borrowings")
 	cashMetric := namedMetric(*summary, "Cash & Equivalents")
@@ -556,7 +730,7 @@ func deriveIntangibleMetrics(summary *FinancialSummary, facts []summaryFact, all
 		// 1. R&D Capital (5-year linear life): sum_{k=0}^4 (1 - k/5) * RD_{t-k}
 		rdCap := 0.0
 		for k := 0; k < 5; k++ {
-			if v, ok := getRD(i, k); ok {
+			if v, ok := resolveRD(i, k); ok {
 				rdCap += (1.0 - float64(k)/5.0) * v
 			}
 		}
@@ -564,7 +738,7 @@ func deriveIntangibleMetrics(summary *FinancialSummary, facts []summaryFact, all
 		// 2. SG&A Capital (3-year linear life, 30% capitalized): sum_{k=0}^2 (1 - k/3) * (0.30 * SGA_{t-k})
 		sgaCap := 0.0
 		for k := 0; k < 3; k++ {
-			if v, ok := getSGA(i, k); ok {
+			if v, ok := resolveSGA(i, k); ok {
 				sgaCap += (1.0 - float64(k)/3.0) * (0.30 * v)
 			}
 		}
@@ -579,14 +753,14 @@ func deriveIntangibleMetrics(summary *FinancialSummary, facts []summaryFact, all
 		// R&D: sum_{k=1}^5 (1/5) * RD_{t-k}
 		rdAmort := 0.0
 		for k := 1; k <= 5; k++ {
-			if v, ok := getRD(i, k); ok {
+			if v, ok := resolveRD(i, k); ok {
 				rdAmort += 0.20 * v
 			}
 		}
 		// SG&A: sum_{k=1}^3 (1/3) * (0.30 * SGA_{t-k}) = sum_{k=1}^3 0.10 * SGA_{t-k}
 		sgaAmort := 0.0
 		for k := 1; k <= 3; k++ {
-			if v, ok := getSGA(i, k); ok {
+			if v, ok := resolveSGA(i, k); ok {
 				sgaAmort += 0.10 * v
 			}
 		}
@@ -600,8 +774,8 @@ func deriveIntangibleMetrics(summary *FinancialSummary, facts []summaryFact, all
 		// 4. Adjusted EBIT:
 		// Adjusted EBIT_t = Operating Income_t + RD_t + 0.30*SGA_t - totalAmort
 		if i < len(opIncomeMetric) && opIncomeMetric[i].Present {
-			currentRD, _ := getRD(i, 0)
-			currentSGA, _ := getSGA(i, 0)
+			currentRD, _ := resolveRD(i, 0)
+			currentSGA, _ := resolveSGA(i, 0)
 			adjEBIT := opIncomeMetric[i].Value + currentRD + (0.30 * currentSGA) - totalAmort
 			adjEBITValues[i] = SummaryValue{
 				Value:   adjEBIT,
@@ -800,21 +974,43 @@ func isAnnualDuration(start, end string) bool {
 	return days >= 300 && days <= 400
 }
 
+func matchesConceptTaxonomy(factTaxonomy, conceptTaxonomy string) bool {
+	if conceptTaxonomy == "" || factTaxonomy == conceptTaxonomy {
+		return true
+	}
+	// Filers often tag standard US-GAAP or IFRS concepts under their custom entity namespace (e.g. pypl)
+	if (conceptTaxonomy == "us-gaap" || conceptTaxonomy == "ifrs-full") && !strings.Contains(factTaxonomy, "-") {
+		return true
+	}
+	return false
+}
+
 func selectSummaryFact(facts []summaryFact, concepts []summaryConcept, periodEnd string) (SummaryValue, bool) {
 	for _, concept := range concepts {
 		var matches []summaryFact
 		for _, fact := range facts {
-			if fact.taxonomy != concept.taxonomy || fact.concept != concept.concept || !isAnnualForm(fact.form) {
+			if !matchesConceptTaxonomy(fact.taxonomy, concept.taxonomy) || fact.concept != concept.concept || !isAnnualForm(fact.form) {
 				continue
 			}
 			if concept.duration {
-				if fact.start == "" || fact.end != periodEnd || !isAnnualDuration(fact.start, fact.end) {
+				if fact.start == "" || (fact.end != periodEnd && periodDistance(fact.end, periodEnd) > 14) || !isAnnualDuration(fact.start, fact.end) {
 					continue
 				}
 			} else if fact.start != "" || !matchingInstantPeriod(fact.end, periodEnd, concept.allowSameFYYear) {
 				continue
 			}
 			matches = append(matches, fact)
+		}
+		if len(matches) == 0 && !concept.duration {
+			// Second pass for instant facts: allow comparative facts in subsequent SEC filings (e.g. 10-Q)
+			for _, fact := range facts {
+				if !matchesConceptTaxonomy(fact.taxonomy, concept.taxonomy) || fact.concept != concept.concept || !secFilingForm(fact.form) {
+					continue
+				}
+				if fact.start == "" && matchingInstantPeriod(fact.end, periodEnd, concept.allowSameFYYear) {
+					matches = append(matches, fact)
+				}
+			}
 		}
 		if len(matches) == 0 {
 			continue
@@ -835,7 +1031,7 @@ func matchingInstantPeriod(factEnd, periodEnd string, allowSameFYYear bool) bool
 		return true
 	}
 	if !allowSameFYYear {
-		return false
+		return periodDistance(factEnd, periodEnd) <= 14
 	}
 	// DEI EntityCommonStockSharesOutstanding is dated as of the 10-K cover page,
 	// typically 15 to 90 days after fiscal year-end.
@@ -846,6 +1042,11 @@ func matchingInstantPeriod(factEnd, periodEnd string, allowSameFYYear bool) bool
 }
 
 func betterSummaryFact(candidate, current summaryFact, periodEnd string) bool {
+	candAnnual := isAnnualForm(candidate.form)
+	currAnnual := isAnnualForm(current.form)
+	if candAnnual != currAnnual {
+		return candAnnual
+	}
 	candidateDistance := periodDistance(candidate.end, periodEnd)
 	currentDistance := periodDistance(current.end, periodEnd)
 	if candidateDistance != currentDistance {
@@ -858,6 +1059,12 @@ func betterSummaryFact(candidate, current summaryFact, periodEnd string) bool {
 	}
 	if candidate.filed != current.filed {
 		return candidate.filed > current.filed
+	}
+	if candidate.filed == current.filed && candidate.accession == current.accession {
+		// Avoid picking tiny Class B/C share dimensions when multiple share classes share a filing
+		if candidate.value != current.value {
+			return candidate.value > current.value
+		}
 	}
 	return candidate.accession > current.accession
 }
@@ -882,6 +1089,32 @@ func summaryUnitRank(unit string) int {
 	return 1
 }
 
+var balanceSheetConcepts = []string{
+	"StockholdersEquity",
+	"StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+	"CommonStockholdersEquity",
+	"PartnersCapital",
+	"PartnersCapitalIncludingPortionAttributableToNoncontrollingInterest",
+	"Equity",
+	"AssetsCurrent",
+	"LiabilitiesCurrent",
+	"Assets",
+}
+
+func findBalanceSheetFact(facts []summaryFact, periodEnd string) (summaryFact, bool) {
+	for _, f := range facts {
+		if f.start != "" || periodDistance(f.end, periodEnd) > 14 {
+			continue
+		}
+		for _, concept := range balanceSheetConcepts {
+			if f.concept == concept {
+				return f, true
+			}
+		}
+	}
+	return summaryFact{}, false
+}
+
 func selectDebt(facts []summaryFact, periodEnd string) SummaryValue {
 	if value, ok := selectDebtFact(facts, []summaryConcept{
 		{taxonomy: "ifrs-full", concept: "Borrowings"},
@@ -891,10 +1124,15 @@ func selectDebt(facts []summaryFact, periodEnd string) SummaryValue {
 	if value, ok := selectDebtFact(facts, []summaryConcept{
 		{taxonomy: "us-gaap", concept: "LongTermDebtNoncurrent"},
 		{taxonomy: "us-gaap", concept: "LongTermDebt"},
+		{taxonomy: "us-gaap", concept: "DebtAndCapitalLeaseObligations"},
+		{taxonomy: "us-gaap", concept: "SeniorNotes"},
+		{taxonomy: "us-gaap", concept: "SeniorLongTermNotes"},
 	}, periodEnd); ok {
 		return addDebtComponents(value, facts, periodEnd, []summaryConcept{
 			{taxonomy: "us-gaap", concept: "LongTermDebtCurrent"},
 			{taxonomy: "us-gaap", concept: "ShortTermBorrowings"},
+			{taxonomy: "us-gaap", concept: "CommercialPaper"},
+			{taxonomy: "us-gaap", concept: "LinesOfCreditCurrent"},
 		})
 	}
 	if value, ok := selectDebtFact(facts, []summaryConcept{
@@ -922,6 +1160,8 @@ func selectDebt(facts []summaryFact, periodEnd string) SummaryValue {
 	}, periodEnd)
 	shortTerm, hasShortTerm := selectDebtFact(facts, []summaryConcept{
 		{taxonomy: "us-gaap", concept: "ShortTermBorrowings"},
+		{taxonomy: "us-gaap", concept: "CommercialPaper"},
+		{taxonomy: "us-gaap", concept: "LinesOfCreditCurrent"},
 	}, periodEnd)
 	if hasLongTermCurrent && hasShortTerm && longTermCurrent.Unit == shortTerm.Unit {
 		longTermCurrent.Value += shortTerm.Value
@@ -933,12 +1173,18 @@ func selectDebt(facts []summaryFact, periodEnd string) SummaryValue {
 	if hasShortTerm {
 		return shortTerm
 	}
+
+	// Unlevered check: If company filed a balance sheet around this period but has zero debt tags:
+	if bsFact, ok := findBalanceSheetFact(facts, periodEnd); ok {
+		return SummaryValue{Value: 0.0, Unit: bsFact.unit, Present: true}
+	}
+
 	return SummaryValue{}
 }
 
 // selectDebtFact first prefers a fact from an annual filing. If the issuer only
 // tagged the year-end debt balance in a later quarterly comparison, accept that
-// instant fact when its period end exactly matches the annual period.
+// instant fact when its period end matches the annual period (within 14 days).
 func selectDebtFact(facts []summaryFact, concepts []summaryConcept, periodEnd string) (SummaryValue, bool) {
 	if value, ok := selectSummaryFact(facts, concepts, periodEnd); ok {
 		return value, true
@@ -948,7 +1194,7 @@ func selectDebtFact(facts []summaryFact, concepts []summaryConcept, periodEnd st
 		found := false
 		for _, fact := range facts {
 			if fact.taxonomy != concept.taxonomy || fact.concept != concept.concept || fact.start != "" ||
-				fact.end != periodEnd || !secFilingForm(fact.form) {
+				!secFilingForm(fact.form) || periodDistance(fact.end, periodEnd) > 14 {
 				continue
 			}
 			if !found || betterSummaryFact(fact, best, periodEnd) {
