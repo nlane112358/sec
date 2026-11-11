@@ -274,8 +274,10 @@ func runDCF(parent context.Context, args []string, output, errorOutput io.Writer
 	taxRate := flags.Float64("tax", 21.0, "fallback tax rate in percent; historical effective tax rate is used by default")
 	marketCap := flags.Float64("market-cap", 0, "market capitalization in reported currency units; otherwise book equity is used for WACC weights")
 	debt := flags.Float64("debt", 0, "gross debt override in reported currency units; use 0 only when filings confirm no debt")
+	profileFlag := flags.String("profile", "", "macro profile for risk-free and tax benchmarks: us, eu, uk, ch (auto-detected if omitted)")
+	adrRatioFlag := flags.Float64("adr-ratio", 0, "ordinary shares per ADR (overrides built-in registry)")
 	dataDir := flags.String("data-dir", sqlite.DefaultDirectory(), "directory containing the shared SQLite database")
-	if err := parseCommandFlags(flags, args, "mode", "growth", "discount", "terminal", "years", "capex-mode", "normalize-capex", "risk-free", "erp", "beta", "cost-debt", "tax", "market-cap", "debt", "data-dir"); err != nil {
+	if err := parseCommandFlags(flags, args, "mode", "growth", "discount", "terminal", "years", "capex-mode", "normalize-capex", "risk-free", "erp", "beta", "cost-debt", "tax", "market-cap", "debt", "profile", "adr-ratio", "data-dir"); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
@@ -292,7 +294,7 @@ func runDCF(parent context.Context, args []string, output, errorOutput io.Writer
 		*costOfDebt < 0 || *costOfDebt >= 100 || *taxRate < 0 || *taxRate >= 100 || *beta < 0 || *marketCap < 0 {
 		return errors.New("WACC rates must be between 0 and 100 percent, and beta and market capitalization must be non-negative")
 	}
-	growthProvided, discountProvided, taxProvided, costDebtProvided, debtProvided, modeProvided := false, false, false, false, false, false
+	growthProvided, discountProvided, taxProvided, costDebtProvided, debtProvided, modeProvided, riskFreeProvided := false, false, false, false, false, false, false
 	flags.Visit(func(parsed *flag.Flag) {
 		switch parsed.Name {
 		case "mode":
@@ -303,6 +305,8 @@ func runDCF(parent context.Context, args []string, output, errorOutput io.Writer
 			discountProvided = true
 		case "tax":
 			taxProvided = true
+		case "risk-free":
+			riskFreeProvided = true
 		case "cost-debt":
 			costDebtProvided = true
 		case "debt":
@@ -362,6 +366,9 @@ func runDCF(parent context.Context, args []string, output, errorOutput io.Writer
 	}
 	databasePath := sharedDatabasePath(*dataDir)
 	return withExistingStore(parent, databasePath, ticker, func(ctx context.Context, store *sec.Store) error {
+		if *adrRatioFlag > 0 {
+			sec.RegisterADRRatio(ticker, *adrRatioFlag)
+		}
 		yearsToLoad := 5
 		if *reverse {
 			yearsToLoad = 6
@@ -370,6 +377,25 @@ func runDCF(parent context.Context, args []string, output, errorOutput io.Writer
 		if err != nil {
 			return err
 		}
+
+		profileKey := *profileFlag
+		if profileKey == "" {
+			for _, m := range summary.Metrics {
+				if m.Name == "Revenue" && len(m.Values) > 0 && m.Values[0].Present {
+					profileKey = m.Values[0].Unit
+					break
+				}
+			}
+		}
+		profile := sec.ResolveMacroProfile(profileKey)
+		if !riskFreeProvided {
+			config.WACC.RiskFreeRate = profile.RiskFreeRate / 100
+		}
+		if !taxProvided {
+			config.WACC.TaxRate = profile.TaxRate / 100
+			config.TaxRate = profile.TaxRate / 100
+		}
+
 		if *reverse {
 			result, err := sec.SolveReverseDCF(summary, config)
 			if err != nil {
@@ -396,15 +422,26 @@ func runArbitrage(parent context.Context, args []string, output, errorOutput io.
 	requireBuybacks := flags.Bool("require-buybacks", true, "require non-dilutive or shrinking share count")
 	maxImpliedGrowth := flags.Float64("max-implied-growth", 0, "optional maximum implied growth rate in percent; 0 disables the filter")
 	riskFree := flags.Float64("risk-free", 4.84, "risk-free rate in percent")
+	profileFlag := flags.String("profile", "", "macro profile for regional risk-free rate: us, eu, uk, ch")
 	equityRiskPremium := flags.Float64("erp", 5.5, "equity risk premium in percent")
 	terminal := flags.Float64("terminal", 2.5, "perpetual terminal growth rate in percent")
 	universeFile := flags.String("universe", "", "optional file restricting screening to these tickers")
 	dataDir := flags.String("data-dir", sqlite.DefaultDirectory(), "directory containing the shared SQLite database")
-	if err := parseCommandFlags(flags, args, "prices", "min-score", "min-roic", "min-consistency", "max-implied-growth", "risk-free", "erp", "terminal", "universe", "data-dir"); err != nil {
+	if err := parseCommandFlags(flags, args, "prices", "min-score", "min-roic", "min-consistency", "max-implied-growth", "risk-free", "profile", "erp", "terminal", "universe", "data-dir"); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
+	}
+	riskFreeProvided := false
+	flags.Visit(func(parsed *flag.Flag) {
+		if parsed.Name == "risk-free" {
+			riskFreeProvided = true
+		}
+	})
+	if *profileFlag != "" && !riskFreeProvided {
+		profile := sec.ResolveMacroProfile(*profileFlag)
+		*riskFree = profile.RiskFreeRate
 	}
 	if len(flags.Args()) != 0 {
 		return errors.New("arbitrage accepts tickers through --universe FILE")
@@ -773,13 +810,14 @@ func runExport(parent context.Context, args []string, output, errorOutput io.Wri
 
 func runRank(parent context.Context, args []string, output, errorOutput io.Writer) error {
 	flags := flag.NewFlagSet("rank", flag.ContinueOnError)
-	setFlagUsage(flags, errorOutput, "usage: sec rank [--universe FILE] [--years 5|6] [--min-revenue USD] [--exclude-financials] [--data-dir DIR]")
+	setFlagUsage(flags, errorOutput, "usage: sec rank [--universe FILE] [--years 5|6] [--min-revenue AMOUNT] [--currency USD|EUR|GBP] [--exclude-financials] [--data-dir DIR]")
 	universeFile := flags.String("universe", "", "optional file restricting ranking to these tickers")
 	years := flags.Int("years", 6, "annual periods to use (6 periods provide five-year trends)")
-	minimumRevenue := flags.Float64("min-revenue", 100_000_000, "minimum latest annual revenue in USD")
+	minimumRevenue := flags.Float64("min-revenue", 100_000_000, "minimum latest annual revenue in USD (or --currency)")
+	currencyFlag := flags.String("currency", "USD", "currency for --min-revenue threshold (default USD)")
 	excludeFinancials := flags.Bool("exclude-financials", false, "exclude SEC financial-sector SIC codes 6000-6799")
 	dataDir := flags.String("data-dir", sqlite.DefaultDirectory(), "directory containing the shared SQLite database")
-	if err := parseCommandFlags(flags, args, "universe", "years", "min-revenue", "data-dir"); err != nil {
+	if err := parseCommandFlags(flags, args, "universe", "years", "min-revenue", "currency", "data-dir"); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
@@ -799,16 +837,20 @@ func runRank(parent context.Context, args []string, output, errorOutput io.Write
 			return err
 		}
 	}
+	minRevUSD := *minimumRevenue
+	if *currencyFlag != "" && !strings.EqualFold(*currencyFlag, "USD") {
+		minRevUSD = sec.ToUSD(*minimumRevenue, *currencyFlag)
+	}
 	databasePath := sharedDatabasePath(*dataDir)
 	return withExistingStoreTimeout(parent, databasePath, "", 30*time.Minute, func(ctx context.Context, store *sec.Store) error {
-		result, err := store.RankCompanies(ctx, *years, *minimumRevenue, tickers, *excludeFinancials)
+		result, err := store.RankCompanies(ctx, *years, minRevUSD, tickers, *excludeFinancials)
 		if err != nil {
 			return err
 		}
 		if _, err := fmt.Fprintf(output, "Fundamental ranks: %d eligible of %d synced companies\n", len(result.Companies), result.Considered); err != nil {
 			return err
 		}
-		if _, err := fmt.Fprintf(output, "Filters: latest revenue ≥ $%.0f and positive net income in the latest three years. Nonfinancial companies also need positive latest operating cash flow; solvency is checked when cash and debt facts are present.\n", *minimumRevenue); err != nil {
+		if _, err := fmt.Fprintf(output, "Filters: latest revenue ≥ %s%.0f and positive net income in the latest three years. Nonfinancial companies also need positive latest operating cash flow; solvency is checked when cash and debt facts are present.\n", sec.CurrencySymbol(*currencyFlag), *minimumRevenue); err != nil {
 			return err
 		}
 		if _, err := fmt.Fprintln(output, "Factor percentiles use SEC SIC major groups; groups with fewer than five companies broaden to the SIC division. Financials and nonfinancials use separate score models and tables."); err != nil {
@@ -900,8 +942,9 @@ func writeNonfinancialRankTable(output io.Writer, companies []sec.RankedCompany)
 		if company.SplitAdjusted {
 			shareLabel += "*"
 		}
-		if _, err := fmt.Fprintf(writer, "%d\t%s\t%s\t%s\t%.1f\t$%.1fM\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			peerRank, company.Ticker, company.Company, company.PeerGroup, company.Score, company.Revenue/1e6,
+		curSymbol := sec.CurrencySymbol(company.Currency)
+		if _, err := fmt.Fprintf(writer, "%d\t%s\t%s\t%s\t%.1f\t%s%.1fM\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			peerRank, company.Ticker, company.Company, company.PeerGroup, company.Score, curSymbol, company.Revenue/1e6,
 			formatRankPercent(company.ROIC, company.HasROIC),
 			formatRankPercent(company.OperatingMargin, company.HasOperatingMargin),
 			formatRankPercent(company.OperatingConsistency, company.HasOperatingMargin),
@@ -934,8 +977,9 @@ func writeFinancialRankTable(output io.Writer, companies []sec.RankedCompany) er
 		if company.SplitAdjusted {
 			shareLabel += "*"
 		}
-		if _, err := fmt.Fprintf(writer, "%d\t%s\t%s\t%s\t%.1f\t$%.1fM\t%s\t%s\t%s\t%s\t%s\n",
-			peerRank, company.Ticker, company.Company, company.PeerGroup, company.Score, company.Revenue/1e6,
+		curSymbol := sec.CurrencySymbol(company.Currency)
+		if _, err := fmt.Fprintf(writer, "%d\t%s\t%s\t%s\t%.1f\t%s%.1fM\t%s\t%s\t%s\t%s\t%s\n",
+			peerRank, company.Ticker, company.Company, company.PeerGroup, company.Score, curSymbol, company.Revenue/1e6,
 			formatRankPercent(company.ROE, company.HasROE),
 			formatRankPercent(company.RevenueCAGR, true),
 			formatRankPercent(company.BookValueGrowth, company.HasBookValueGrowth),

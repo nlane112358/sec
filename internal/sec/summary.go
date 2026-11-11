@@ -377,6 +377,8 @@ FROM sec_facts WHERE cik = ?`, cik)
 		summary.Periods = append(summary.Periods, SummaryPeriod{Year: end[:4], End: end})
 	}
 
+	primaryCurrency := detectPrimaryCurrency(facts)
+
 	for _, definition := range summaryMetricDefinitions {
 		metric := SummaryMetric{Name: definition.name, Values: make([]SummaryValue, len(summary.Periods))}
 		for i, period := range summary.Periods {
@@ -407,7 +409,7 @@ FROM sec_facts WHERE cik = ?`, cik)
 					}
 				}
 			case definition.name == "Capital Expenditure":
-				metric.Values[i], _ = selectSummaryFact(facts, definition.concepts, period.End)
+				metric.Values[i], _ = selectSummaryFact(facts, definition.concepts, period.End, primaryCurrency)
 				if !metric.Values[i].Present {
 					cashFlow := summaryMetricValue(summary.Metrics, "Operating Cash Flow", i)
 					if cashFlow.Present {
@@ -419,14 +421,14 @@ FROM sec_facts WHERE cik = ?`, cik)
 					}
 				}
 			case definition.sgaExpense:
-				metric.Values[i] = selectSGA(facts, period.End, definition.concepts)
+				metric.Values[i] = selectSGA(facts, period.End, definition.concepts, primaryCurrency)
 			case definition.name == "Debt / Borrowings":
-				metric.Values[i] = selectDebt(facts, period.End)
+				metric.Values[i] = selectDebt(facts, period.End, primaryCurrency)
 			case definition.intangibleAmortization || definition.adjustedOperatingIncome ||
 				definition.intangibleCapital || definition.adjustedInvestedCapital || definition.adjustedROIC:
 				// Derived after standard facts are loaded.
 			default:
-				metric.Values[i], _ = selectSummaryFact(facts, definition.concepts, period.End)
+				metric.Values[i], _ = selectSummaryFact(facts, definition.concepts, period.End, primaryCurrency)
 			}
 		}
 		summary.Metrics = append(summary.Metrics, metric)
@@ -531,8 +533,8 @@ var sgaConcepts = []summaryConcept{
 	{taxonomy: "ifrs-full", concept: "AdministrativeExpense", duration: true},
 }
 
-func selectSGA(facts []summaryFact, periodEnd string, concepts []summaryConcept) SummaryValue {
-	if val, ok := selectSummaryFact(facts, concepts, periodEnd); ok {
+func selectSGA(facts []summaryFact, periodEnd string, concepts []summaryConcept, preferredCurrency ...string) SummaryValue {
+	if val, ok := selectSummaryFact(facts, concepts, periodEnd, preferredCurrency...); ok {
 		return val
 	}
 	smConcepts := []summaryConcept{
@@ -548,8 +550,8 @@ func selectSGA(facts []summaryFact, periodEnd string, concepts []summaryConcept)
 		{taxonomy: "us-gaap", concept: "GeneralExpense", duration: true},
 		{taxonomy: "ifrs-full", concept: "AdministrativeExpense", duration: true},
 	}
-	sm, okSM := selectSummaryFact(facts, smConcepts, periodEnd)
-	ga, okGA := selectSummaryFact(facts, gaConcepts, periodEnd)
+	sm, okSM := selectSummaryFact(facts, smConcepts, periodEnd, preferredCurrency...)
+	ga, okGA := selectSummaryFact(facts, gaConcepts, periodEnd, preferredCurrency...)
 	if okSM && okGA && strings.EqualFold(sm.Unit, ga.Unit) {
 		return SummaryValue{
 			Value:   math.Abs(sm.Value) + math.Abs(ga.Value),
@@ -985,7 +987,7 @@ func matchesConceptTaxonomy(factTaxonomy, conceptTaxonomy string) bool {
 	return false
 }
 
-func selectSummaryFact(facts []summaryFact, concepts []summaryConcept, periodEnd string) (SummaryValue, bool) {
+func selectSummaryFact(facts []summaryFact, concepts []summaryConcept, periodEnd string, preferredCurrency ...string) (SummaryValue, bool) {
 	for _, concept := range concepts {
 		var matches []summaryFact
 		for _, fact := range facts {
@@ -1017,7 +1019,7 @@ func selectSummaryFact(facts []summaryFact, concepts []summaryConcept, periodEnd
 		}
 		best := matches[0]
 		for _, candidate := range matches[1:] {
-			if betterSummaryFact(candidate, best, periodEnd) {
+			if betterSummaryFact(candidate, best, periodEnd, preferredCurrency...) {
 				best = candidate
 			}
 		}
@@ -1041,7 +1043,7 @@ func matchingInstantPeriod(factEnd, periodEnd string, allowSameFYYear bool) bool
 	return len(factEnd) >= 4 && len(periodEnd) >= 4 && factEnd[:4] == periodEnd[:4]
 }
 
-func betterSummaryFact(candidate, current summaryFact, periodEnd string) bool {
+func betterSummaryFact(candidate, current summaryFact, periodEnd string, preferredCurrency ...string) bool {
 	candAnnual := isAnnualForm(candidate.form)
 	currAnnual := isAnnualForm(current.form)
 	if candAnnual != currAnnual {
@@ -1052,8 +1054,8 @@ func betterSummaryFact(candidate, current summaryFact, periodEnd string) bool {
 	if candidateDistance != currentDistance {
 		return candidateDistance < currentDistance
 	}
-	candidateUnitRank := summaryUnitRank(candidate.unit)
-	currentUnitRank := summaryUnitRank(current.unit)
+	candidateUnitRank := summaryUnitRank(candidate.unit, preferredCurrency...)
+	currentUnitRank := summaryUnitRank(current.unit, preferredCurrency...)
 	if candidateUnitRank != currentUnitRank {
 		return candidateUnitRank < currentUnitRank
 	}
@@ -1082,8 +1084,61 @@ func periodDistance(a, b string) int64 {
 	return days
 }
 
-func summaryUnitRank(unit string) int {
-	if strings.EqualFold(unit, "USD") || strings.EqualFold(unit, "shares") {
+func detectPrimaryCurrency(facts []summaryFact) string {
+	revenueConcepts := map[string]bool{
+		"RevenueFromContractWithCustomerExcludingAssessedTax": true,
+		"RevenueFromContractWithCustomerIncludingAssessedTax": true,
+		"Revenues":                          true,
+		"Revenue":                           true,
+		"SalesRevenueNet":                   true,
+		"SalesRevenueServicesNet":           true,
+		"TotalRevenuesAndOtherIncome":       true,
+		"ProfitLoss":                        true,
+		"ProfitLossFromOperatingActivities": true,
+		"OperatingIncomeLoss":               true,
+	}
+	counts := make(map[string]int)
+	for _, f := range facts {
+		if !isAnnualForm(f.form) || f.unit == "" || strings.EqualFold(f.unit, "shares") {
+			continue
+		}
+		if revenueConcepts[f.concept] {
+			counts[strings.ToUpper(f.unit)]++
+		}
+	}
+	bestUnit, bestCount := "", 0
+	for unit, count := range counts {
+		if count > bestCount {
+			bestUnit = unit
+			bestCount = count
+		}
+	}
+	if bestUnit != "" {
+		return bestUnit
+	}
+	for _, f := range facts {
+		if isAnnualForm(f.form) && f.unit != "" && !strings.EqualFold(f.unit, "shares") {
+			counts[strings.ToUpper(f.unit)]++
+		}
+	}
+	for unit, count := range counts {
+		if count > bestCount {
+			bestUnit = unit
+			bestCount = count
+		}
+	}
+	if bestUnit != "" {
+		return bestUnit
+	}
+	return "USD"
+}
+
+func summaryUnitRank(unit string, preferredCurrency ...string) int {
+	preferred := "USD"
+	if len(preferredCurrency) > 0 && preferredCurrency[0] != "" {
+		preferred = preferredCurrency[0]
+	}
+	if strings.EqualFold(unit, preferred) || strings.EqualFold(unit, "shares") {
 		return 0
 	}
 	return 1
@@ -1115,10 +1170,10 @@ func findBalanceSheetFact(facts []summaryFact, periodEnd string) (summaryFact, b
 	return summaryFact{}, false
 }
 
-func selectDebt(facts []summaryFact, periodEnd string) SummaryValue {
+func selectDebt(facts []summaryFact, periodEnd string, preferredCurrency ...string) SummaryValue {
 	if value, ok := selectDebtFact(facts, []summaryConcept{
 		{taxonomy: "ifrs-full", concept: "Borrowings"},
-	}, periodEnd); ok {
+	}, periodEnd, preferredCurrency...); ok {
 		return value
 	}
 	if value, ok := selectDebtFact(facts, []summaryConcept{
@@ -1127,22 +1182,22 @@ func selectDebt(facts []summaryFact, periodEnd string) SummaryValue {
 		{taxonomy: "us-gaap", concept: "DebtAndCapitalLeaseObligations"},
 		{taxonomy: "us-gaap", concept: "SeniorNotes"},
 		{taxonomy: "us-gaap", concept: "SeniorLongTermNotes"},
-	}, periodEnd); ok {
+	}, periodEnd, preferredCurrency...); ok {
 		return addDebtComponents(value, facts, periodEnd, []summaryConcept{
 			{taxonomy: "us-gaap", concept: "LongTermDebtCurrent"},
 			{taxonomy: "us-gaap", concept: "ShortTermBorrowings"},
 			{taxonomy: "us-gaap", concept: "CommercialPaper"},
 			{taxonomy: "us-gaap", concept: "LinesOfCreditCurrent"},
-		})
+		}, preferredCurrency...)
 	}
 	if value, ok := selectDebtFact(facts, []summaryConcept{
 		{taxonomy: "ifrs-full", concept: "NoncurrentBorrowings"},
-	}, periodEnd); ok {
+	}, periodEnd, preferredCurrency...); ok {
 		current, currentOK := selectDebtFact(facts, []summaryConcept{
 			{taxonomy: "ifrs-full", concept: "CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings"},
 			{taxonomy: "ifrs-full", concept: "CurrentPortionOfLongtermBorrowings"},
 			{taxonomy: "ifrs-full", concept: "CurrentBorrowings"},
-		}, periodEnd)
+		}, periodEnd, preferredCurrency...)
 		if currentOK && current.Unit == value.Unit {
 			value.Value += current.Value
 		}
@@ -1152,17 +1207,17 @@ func selectDebt(facts []summaryFact, periodEnd string) SummaryValue {
 		{taxonomy: "ifrs-full", concept: "CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings"},
 		{taxonomy: "ifrs-full", concept: "CurrentPortionOfLongtermBorrowings"},
 		{taxonomy: "ifrs-full", concept: "CurrentBorrowings"},
-	}, periodEnd); ok {
+	}, periodEnd, preferredCurrency...); ok {
 		return current
 	}
 	longTermCurrent, hasLongTermCurrent := selectDebtFact(facts, []summaryConcept{
 		{taxonomy: "us-gaap", concept: "LongTermDebtCurrent"},
-	}, periodEnd)
+	}, periodEnd, preferredCurrency...)
 	shortTerm, hasShortTerm := selectDebtFact(facts, []summaryConcept{
 		{taxonomy: "us-gaap", concept: "ShortTermBorrowings"},
 		{taxonomy: "us-gaap", concept: "CommercialPaper"},
 		{taxonomy: "us-gaap", concept: "LinesOfCreditCurrent"},
-	}, periodEnd)
+	}, periodEnd, preferredCurrency...)
 	if hasLongTermCurrent && hasShortTerm && longTermCurrent.Unit == shortTerm.Unit {
 		longTermCurrent.Value += shortTerm.Value
 		return longTermCurrent
@@ -1185,8 +1240,8 @@ func selectDebt(facts []summaryFact, periodEnd string) SummaryValue {
 // selectDebtFact first prefers a fact from an annual filing. If the issuer only
 // tagged the year-end debt balance in a later quarterly comparison, accept that
 // instant fact when its period end matches the annual period (within 14 days).
-func selectDebtFact(facts []summaryFact, concepts []summaryConcept, periodEnd string) (SummaryValue, bool) {
-	if value, ok := selectSummaryFact(facts, concepts, periodEnd); ok {
+func selectDebtFact(facts []summaryFact, concepts []summaryConcept, periodEnd string, preferredCurrency ...string) (SummaryValue, bool) {
+	if value, ok := selectSummaryFact(facts, concepts, periodEnd, preferredCurrency...); ok {
 		return value, true
 	}
 	for _, concept := range concepts {
@@ -1197,7 +1252,7 @@ func selectDebtFact(facts []summaryFact, concepts []summaryConcept, periodEnd st
 				!secFilingForm(fact.form) || periodDistance(fact.end, periodEnd) > 14 {
 				continue
 			}
-			if !found || betterSummaryFact(fact, best, periodEnd) {
+			if !found || betterSummaryFact(fact, best, periodEnd, preferredCurrency...) {
 				best, found = fact, true
 			}
 		}
@@ -1208,9 +1263,9 @@ func selectDebtFact(facts []summaryFact, concepts []summaryConcept, periodEnd st
 	return SummaryValue{}, false
 }
 
-func addDebtComponents(total SummaryValue, facts []summaryFact, periodEnd string, components []summaryConcept) SummaryValue {
+func addDebtComponents(total SummaryValue, facts []summaryFact, periodEnd string, components []summaryConcept, preferredCurrency ...string) SummaryValue {
 	for _, component := range components {
-		value, ok := selectDebtFact(facts, []summaryConcept{component}, periodEnd)
+		value, ok := selectDebtFact(facts, []summaryConcept{component}, periodEnd, preferredCurrency...)
 		if !ok || value.Unit != total.Unit {
 			continue
 		}

@@ -257,9 +257,11 @@ func setValuation(marketCaps, prices map[string]float64, ticker, kind string, ra
 
 func parseValuationNumber(raw any) (float64, bool) {
 	text := strings.TrimSpace(fmt.Sprint(raw))
-	text = strings.Trim(text, "\"'$")
+	text = strings.Trim(text, "\"'$€£¥")
 	text = strings.ReplaceAll(text, ",", "")
-	text = strings.TrimSpace(strings.TrimPrefix(strings.ToUpper(text), "USD"))
+	for _, cur := range []string{"USD", "EUR", "GBP", "GBp", "CHF", "DKK", "SEK", "NOK", "CAD", "AUD", "JPY"} {
+		text = strings.TrimSpace(strings.TrimPrefix(strings.ToUpper(text), cur))
+	}
 	if text == "" {
 		return 0, false
 	}
@@ -312,8 +314,21 @@ func FetchLivePrices(ctx context.Context, tickers []string, logOut io.Writer) ma
 	return out
 }
 
+func yahooSymbolForTicker(ticker string) string {
+	upper := strings.ToUpper(strings.TrimSpace(ticker))
+	dotIndex := strings.LastIndex(upper, ".")
+	if dotIndex > 0 {
+		suffix := upper[dotIndex:]
+		switch suffix {
+		case ".L", ".PA", ".DE", ".AS", ".SW", ".MI", ".MC", ".CO", ".ST", ".HE", ".VI", ".BR", ".LS", ".IR", ".TO", ".V", ".AX":
+			return ticker
+		}
+	}
+	return strings.ReplaceAll(ticker, ".", "-")
+}
+
 func fetchYahooChartPrice(ctx context.Context, client *http.Client, ticker string) (float64, error) {
-	yahooSymbol := strings.ReplaceAll(ticker, ".", "-")
+	yahooSymbol := yahooSymbolForTicker(ticker)
 	endpoint := fmt.Sprintf("https://query1.finance.yahoo.com/v8/finance/chart/%s?interval=1d&range=5d", url.PathEscape(yahooSymbol))
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -334,6 +349,7 @@ func fetchYahooChartPrice(ctx context.Context, client *http.Client, ticker strin
 		Chart struct {
 			Result []struct {
 				Meta struct {
+					Currency           string  `json:"currency"`
 					RegularMarketPrice float64 `json:"regularMarketPrice"`
 					PreviousClose      float64 `json:"previousClose"`
 				} `json:"meta"`
@@ -347,17 +363,28 @@ func fetchYahooChartPrice(ctx context.Context, client *http.Client, ticker strin
 		return 0, fmt.Errorf("empty chart result for %s", ticker)
 	}
 	meta := payload.Chart.Result[0].Meta
-	if meta.RegularMarketPrice > 0 && finite(meta.RegularMarketPrice) {
-		return meta.RegularMarketPrice, nil
+	price := meta.RegularMarketPrice
+	if price <= 0 || !finite(price) {
+		price = meta.PreviousClose
 	}
-	if meta.PreviousClose > 0 && finite(meta.PreviousClose) {
-		return meta.PreviousClose, nil
+	if price > 0 && finite(price) {
+		// UK stocks on LSE trade in pence (GBp); convert to pounds sterling (GBP)
+		if strings.EqualFold(meta.Currency, "GBp") {
+			price = price / 100.0
+		}
+		return price, nil
 	}
 	return 0, fmt.Errorf("no positive price in yahoo response for %s", ticker)
 }
 
 func fetchStooqPrice(ctx context.Context, client *http.Client, ticker string) (float64, error) {
+	upper := strings.ToUpper(strings.TrimSpace(ticker))
 	stooqSymbol := strings.ToLower(strings.ReplaceAll(ticker, ".", "-")) + ".us"
+	if strings.HasSuffix(upper, ".L") {
+		stooqSymbol = strings.ToLower(strings.TrimSuffix(upper, ".L")) + ".uk"
+	} else if strings.HasSuffix(upper, ".DE") {
+		stooqSymbol = strings.ToLower(strings.TrimSuffix(upper, ".DE")) + ".de"
+	}
 	endpoint := "https://stooq.com/q/l/?s=" + url.QueryEscape(stooqSymbol) + "&f=sd2t2ohlcv&h&e=csv"
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {

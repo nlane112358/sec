@@ -84,6 +84,42 @@ func TestRankCandidateKeepsMissingOperatingMarginMissing(t *testing.T) {
 	}
 }
 
+func TestRankCandidateSupportsEuropeanCurrencies(t *testing.T) {
+	summary := rankTestSummary(map[string][]SummaryValue{
+		"Revenue":                         testValues("EUR", 200e6, 180e6, 160e6, 140e6, 120e6, 100e6),
+		"Operating Income":                testValues("EUR", 40e6, 36e6, 32e6, 28e6, 24e6, 20e6),
+		"Net Income":                      testValues("EUR", 30e6, 27e6, 24e6, 21e6, 18e6, 15e6),
+		"Operating Cash Flow":             testValues("EUR", 45e6, 40e6, 35e6, 30e6, 25e6, 20e6),
+		"Free Cash Flow":                  testValues("EUR", 40e6, 36e6, 32e6, 28e6, 24e6, 20e6),
+		"SBC-Adjusted FCF Proxy":          testValues("EUR", 30e6, 27e6, 24e6, 21e6, 18e6, 15e6),
+		"Stock-Based Compensation":        testValues("EUR", 10e6, 9e6, 8e6, 7e6, 6e6, 5e6),
+		"Stockholders' Equity":            testValues("EUR", 120e6, 110e6, 100e6, 90e6, 80e6, 70e6),
+		"Cash & Equivalents":              testValues("EUR", 10e6, 10e6, 10e6, 10e6, 10e6, 10e6),
+		"Debt / Borrowings":               testValues("EUR", 20e6, 20e6, 20e6, 20e6, 20e6, 20e6),
+		"Total Assets":                    testValues("EUR", 200e6, 190e6, 180e6, 170e6, 160e6, 150e6),
+		"Income Tax Expense":              testValues("EUR", 5.25e6, 4.725e6, 4.2e6, 3.675e6, 3.15e6, 2.625e6),
+		"Income Before Tax":               testValues("EUR", 25e6, 22.5e6, 20e6, 17.5e6, 15e6, 12.5e6),
+		"Diluted Weighted Average Shares": testValues("shares", 100e6, 100e6, 100e6, 100e6, 100e6, 100e6),
+		"Shares Outstanding":             testValues("shares", 100e6, 100e6, 100e6, 100e6, 100e6, 100e6),
+	})
+	candidate, ok := makeRankCandidate(summary, 100e6)
+	if !ok {
+		t.Fatal("expected EUR candidate to pass the fundamentals screen")
+	}
+	if candidate.company.Currency != "EUR" {
+		t.Fatalf("expected candidate currency to be EUR, got %q", candidate.company.Currency)
+	}
+	if !candidate.company.HasROIC || candidate.company.ROIC <= 0 {
+		t.Fatalf("expected positive ROIC for EUR candidate, got available=%v value=%v", candidate.company.HasROIC, candidate.company.ROIC)
+	}
+	if !candidate.company.HasROE || candidate.company.ROE <= 0 {
+		t.Fatalf("expected positive ROE for EUR candidate, got available=%v value=%v", candidate.company.HasROE, candidate.company.ROE)
+	}
+	if !closeEnough(candidate.company.Revenue, 200e6) {
+		t.Fatalf("expected latest revenue 200e6, got %v", candidate.company.Revenue)
+	}
+}
+
 func TestPeerGroupsUseSeparateFinancialAndIndustryPercentiles(t *testing.T) {
 	candidates := []rankCandidate{
 		{company: RankedCompany{Sector: "Financials", PeerGroup: "Financial SIC 63"}, factors: map[string]float64{"roe": 0.10, "growth": 0.10}, percentile: map[string]float64{}},

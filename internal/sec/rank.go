@@ -17,6 +17,7 @@ type RankedCompany struct {
 	Year                 string
 	TrendYears           int
 	Revenue              float64
+	Currency             string
 	ROIC                 float64
 	HasROIC              bool
 	ROE                  float64
@@ -294,43 +295,60 @@ func makeRankCandidate(summary FinancialSummary, minimumRevenue float64, financi
 	if len(revenue) < trendYears+1 || len(netIncome) < trendYears+1 || len(shares) < trendYears+1 {
 		return rankCandidate{}, false
 	}
-	if !isUSD(revenue[0]) || revenue[0].Value < minimumRevenue || revenue[0].Value <= 0 ||
-		!isUSD(revenue[trendYears]) || revenue[trendYears].Value <= 0 ||
+
+	companyCurrency := ""
+	if len(revenue) > 0 && isMonetary(revenue[0]) {
+		companyCurrency = revenue[0].Unit
+	} else {
+		companyCurrency = summaryCurrency(summary)
+	}
+	if companyCurrency == "" {
+		companyCurrency = "USD"
+	}
+
+	if !isCurrency(revenue[0], companyCurrency) || revenue[0].Value <= 0 ||
+		!isCurrency(revenue[trendYears], companyCurrency) || revenue[trendYears].Value <= 0 ||
 		!isShareCount(shares[0]) || !isShareCount(shares[trendYears]) ||
 		shares[0].Value <= 0 || shares[trendYears].Value <= 0 {
 		return rankCandidate{}, false
 	}
+	// Check minimum revenue threshold converted to USD
+	revenueInUSD := ToUSD(revenue[0].Value, companyCurrency)
+	if revenueInUSD < minimumRevenue {
+		return rankCandidate{}, false
+	}
+
 	for i := 0; i < trendYears+1; i++ {
-		if !isUSD(revenue[i]) || revenue[i].Value <= 0 || !isShareCount(shares[i]) || shares[i].Value <= 0 {
+		if !isCurrency(revenue[i], companyCurrency) || revenue[i].Value <= 0 || !isShareCount(shares[i]) || shares[i].Value <= 0 {
 			return rankCandidate{}, false
 		}
 	}
 	for i := 0; i < 3; i++ {
-		if i >= len(netIncome) || !isUSD(netIncome[i]) || netIncome[i].Value <= 0 {
+		if i >= len(netIncome) || !isCurrency(netIncome[i], companyCurrency) || netIncome[i].Value <= 0 {
 			return rankCandidate{}, false
 		}
 	}
-	if !financial && (len(operatingCashFlow) == 0 || !isUSD(operatingCashFlow[0]) || operatingCashFlow[0].Value <= 0) {
+	if !financial && (len(operatingCashFlow) == 0 || !isCurrency(operatingCashFlow[0], companyCurrency) || operatingCashFlow[0].Value <= 0) {
 		return rankCandidate{}, false
 	}
 
-	latestCash, cashOK := latestUSD(cash)
-	latestDebt, debtOK := latestUSD(debt)
-	latestAssets, assetsOK := latestUSD(assets)
+	latestCash, cashOK := latestCurrency(cash, companyCurrency)
+	latestDebt, debtOK := latestCurrency(debt, companyCurrency)
+	latestAssets, assetsOK := latestCurrency(assets, companyCurrency)
 	ownerValues := make([]float64, 0, trendYears)
 	ownerMargins := make([]float64, 0, trendYears)
 	adjustedCount := 0
 	for i := 0; i < trendYears; i++ {
 		owner := SummaryValue{}
-		if i < len(ownerEarningsMetric) && isUSD(ownerEarningsMetric[i]) {
+		if i < len(ownerEarningsMetric) && isCurrency(ownerEarningsMetric[i], companyCurrency) {
 			owner = ownerEarningsMetric[i]
-			if i < len(sbc) && isUSD(sbc[i]) && strings.EqualFold(sbc[i].Unit, owner.Unit) {
+			if i < len(sbc) && isCurrency(sbc[i], companyCurrency) && strings.EqualFold(sbc[i].Unit, owner.Unit) {
 				adjustedCount++
 			}
-		} else if i < len(freeCashFlow) && isUSD(freeCashFlow[i]) {
+		} else if i < len(freeCashFlow) && isCurrency(freeCashFlow[i], companyCurrency) {
 			owner = freeCashFlow[i]
 		}
-		if owner.Present && isUSD(revenue[i]) && strings.EqualFold(owner.Unit, revenue[i].Unit) {
+		if owner.Present && isCurrency(revenue[i], companyCurrency) && strings.EqualFold(owner.Unit, revenue[i].Unit) {
 			ownerValues = append(ownerValues, owner.Value)
 			ownerMargins = append(ownerMargins, owner.Value/revenue[i].Value)
 		}
@@ -354,14 +372,14 @@ func makeRankCandidate(summary FinancialSummary, minimumRevenue float64, financi
 	epsGrowth, hasEPSGrowth := compoundGrowth(epsEnd, epsStart, trendYears)
 	shareReduction := (shares[trendYears].Value - shares[0].Value) / shares[trendYears].Value
 
-	roe, hasROE := averageROE(netIncome, equity, trendYears)
-	roic, hasROIC := averageROIC(operatingIncome, equity, debt, cash, taxExpense, pretaxIncome, trendYears)
-	bookGrowth, hasBookGrowth := bookValuePerShareGrowth(equity, shares, trendYears)
+	roe, hasROE := averageROE(netIncome, equity, trendYears, companyCurrency)
+	roic, hasROIC := averageROIC(operatingIncome, equity, debt, cash, taxExpense, pretaxIncome, trendYears, companyCurrency)
+	bookGrowth, hasBookGrowth := bookValuePerShareGrowth(equity, shares, trendYears, companyCurrency)
 
 	opMarginValues := make([]float64, 0, trendYears)
 	positiveMarginYears := 0
 	for i := 0; i < trendYears && i < len(operatingIncome); i++ {
-		if isUSD(operatingIncome[i]) && isUSD(revenue[i]) && strings.EqualFold(operatingIncome[i].Unit, revenue[i].Unit) {
+		if isCurrency(operatingIncome[i], companyCurrency) && isCurrency(revenue[i], companyCurrency) && strings.EqualFold(operatingIncome[i].Unit, revenue[i].Unit) {
 			margin := operatingIncome[i].Value / revenue[i].Value
 			opMarginValues = append(opMarginValues, margin)
 			if margin > 0 {
@@ -377,7 +395,7 @@ func makeRankCandidate(summary FinancialSummary, minimumRevenue float64, financi
 
 	fcfMargins := make([]float64, 0, trendYears)
 	for i := 0; i < trendYears && i < len(freeCashFlow); i++ {
-		if isUSD(freeCashFlow[i]) && isUSD(revenue[i]) && strings.EqualFold(freeCashFlow[i].Unit, revenue[i].Unit) {
+		if isCurrency(freeCashFlow[i], companyCurrency) && isCurrency(revenue[i], companyCurrency) && strings.EqualFold(freeCashFlow[i].Unit, revenue[i].Unit) {
 			fcfMargins = append(fcfMargins, freeCashFlow[i].Value/revenue[i].Value)
 		}
 	}
@@ -431,6 +449,7 @@ func makeRankCandidate(summary FinancialSummary, minimumRevenue float64, financi
 			Year:                 summary.Periods[0].Year,
 			TrendYears:           trendYears,
 			Revenue:              revenue[0].Value,
+			Currency:             companyCurrency,
 			ROIC:                 roic,
 			HasROIC:              hasROIC,
 			ROE:                  roe,
@@ -505,16 +524,23 @@ func adjustSplitShareSeries(values []SummaryValue) ([]SummaryValue, bool) {
 	return adjusted, changed
 }
 
-func averageROE(netIncome, equity []SummaryValue, years int) (float64, bool) {
+func averageROE(netIncome, equity []SummaryValue, years int, currency ...string) (float64, bool) {
 	if years < 1 || len(netIncome) < years || len(equity) < years+1 {
 		return 0, false
 	}
+	expectedCur := ""
+	if len(currency) > 0 {
+		expectedCur = currency[0]
+	}
 	values := make([]float64, 0, years)
 	for i := 0; i < years; i++ {
-		if !isUSD(netIncome[i]) || !isUSD(equity[i]) || !isUSD(equity[i+1]) ||
-			!strings.EqualFold(netIncome[i].Unit, equity[i].Unit) ||
-			!strings.EqualFold(equity[i].Unit, equity[i+1].Unit) ||
-			equity[i].Value <= 0 || equity[i+1].Value <= 0 {
+		validCur := isMonetary(netIncome[i]) && isMonetary(equity[i]) && isMonetary(equity[i+1])
+		if expectedCur != "" {
+			validCur = isCurrency(netIncome[i], expectedCur) && isCurrency(equity[i], expectedCur) && isCurrency(equity[i+1], expectedCur)
+		} else {
+			validCur = validCur && strings.EqualFold(netIncome[i].Unit, equity[i].Unit) && strings.EqualFold(equity[i].Unit, equity[i+1].Unit)
+		}
+		if !validCur || equity[i].Value <= 0 || equity[i+1].Value <= 0 {
 			return 0, false
 		}
 		values = append(values, netIncome[i].Value/((equity[i].Value+equity[i+1].Value)/2))
@@ -523,17 +549,25 @@ func averageROE(netIncome, equity []SummaryValue, years int) (float64, bool) {
 	return value, finite(value)
 }
 
-func averageROIC(operatingIncome, equity, debt, cash, taxExpense, pretaxIncome []SummaryValue, years int) (float64, bool) {
+func averageROIC(operatingIncome, equity, debt, cash, taxExpense, pretaxIncome []SummaryValue, years int, currency ...string) (float64, bool) {
 	if years < 1 || len(operatingIncome) < years || len(equity) < years+1 || len(debt) < years+1 || len(cash) < years+1 {
 		return 0, false
 	}
+	expectedCur := ""
+	if len(currency) > 0 {
+		expectedCur = currency[0]
+	}
 	values := make([]float64, 0, years)
 	for i := 0; i < years; i++ {
-		if !isUSD(operatingIncome[i]) || !isUSD(equity[i]) || !isUSD(equity[i+1]) ||
-			!isUSD(debt[i]) || !isUSD(debt[i+1]) || !isUSD(cash[i]) || !isUSD(cash[i+1]) {
-			return 0, false
+		validCur := isMonetary(operatingIncome[i]) && isMonetary(equity[i]) && isMonetary(equity[i+1]) &&
+			isMonetary(debt[i]) && isMonetary(debt[i+1]) && isMonetary(cash[i]) && isMonetary(cash[i+1])
+		if expectedCur != "" {
+			validCur = isCurrency(operatingIncome[i], expectedCur) && isCurrency(equity[i], expectedCur) && isCurrency(equity[i+1], expectedCur) &&
+				isCurrency(debt[i], expectedCur) && isCurrency(debt[i+1], expectedCur) && isCurrency(cash[i], expectedCur) && isCurrency(cash[i+1], expectedCur)
+		} else {
+			validCur = validCur && sameCurrency(operatingIncome[i], equity[i], debt[i], cash[i], equity[i+1], debt[i+1], cash[i+1])
 		}
-		if !sameCurrency(operatingIncome[i], equity[i], debt[i], cash[i], equity[i+1], debt[i+1], cash[i+1]) {
+		if !validCur {
 			return 0, false
 		}
 		capitalStart := equity[i].Value + debt[i].Value - cash[i].Value
@@ -542,9 +576,10 @@ func averageROIC(operatingIncome, equity, debt, cash, taxExpense, pretaxIncome [
 		if investedCapital <= 0 {
 			return 0, false
 		}
-		taxRate := 0.21
-		if i < len(taxExpense) && i < len(pretaxIncome) && isUSD(taxExpense[i]) && isUSD(pretaxIncome[i]) &&
-			strings.EqualFold(taxExpense[i].Unit, pretaxIncome[i].Unit) && pretaxIncome[i].Value > 0 {
+		profile := ResolveMacroProfile(operatingIncome[i].Unit)
+		taxRate := profile.TaxRate / 100.0
+		curUnit := operatingIncome[i].Unit
+		if i < len(taxExpense) && i < len(pretaxIncome) && isCurrency(taxExpense[i], curUnit) && isCurrency(pretaxIncome[i], curUnit) && pretaxIncome[i].Value > 0 {
 			observed := math.Abs(taxExpense[i].Value) / pretaxIncome[i].Value
 			if observed >= 0 && observed <= 0.50 {
 				taxRate = observed
@@ -556,11 +591,21 @@ func averageROIC(operatingIncome, equity, debt, cash, taxExpense, pretaxIncome [
 	return value, finite(value)
 }
 
-func bookValuePerShareGrowth(equity, shares []SummaryValue, years int) (float64, bool) {
+func bookValuePerShareGrowth(equity, shares []SummaryValue, years int, currency ...string) (float64, bool) {
 	if len(equity) < years+1 || len(shares) < years+1 {
 		return 0, false
 	}
-	if !isUSD(equity[0]) || !isUSD(equity[years]) || !isShareCount(shares[0]) || !isShareCount(shares[years]) ||
+	expectedCur := ""
+	if len(currency) > 0 {
+		expectedCur = currency[0]
+	}
+	validEquity := isMonetary(equity[0]) && isMonetary(equity[years])
+	if expectedCur != "" {
+		validEquity = isCurrency(equity[0], expectedCur) && isCurrency(equity[years], expectedCur)
+	} else {
+		validEquity = validEquity && strings.EqualFold(equity[0].Unit, equity[years].Unit)
+	}
+	if !validEquity || !isShareCount(shares[0]) || !isShareCount(shares[years]) ||
 		equity[0].Value <= 0 || equity[years].Value <= 0 || shares[0].Value <= 0 || shares[years].Value <= 0 {
 		return 0, false
 	}
@@ -594,11 +639,15 @@ func meanAvailable(values []float64, minimum int) (float64, bool) {
 	return value, finite(value)
 }
 
-func latestUSD(values []SummaryValue) (SummaryValue, bool) {
-	if len(values) == 0 || !isUSD(values[0]) {
+func latestCurrency(values []SummaryValue, currency string) (SummaryValue, bool) {
+	if len(values) == 0 || !isCurrency(values[0], currency) {
 		return SummaryValue{}, false
 	}
 	return values[0], true
+}
+
+func latestUSD(values []SummaryValue) (SummaryValue, bool) {
+	return latestCurrency(values, "USD")
 }
 
 func sameCurrency(values ...SummaryValue) bool {
@@ -644,6 +693,14 @@ func namedMetric(summary FinancialSummary, name string) []SummaryValue {
 		}
 	}
 	return nil
+}
+
+func isMonetary(value SummaryValue) bool {
+	return value.Present && value.Unit != "" && !strings.EqualFold(value.Unit, "shares")
+}
+
+func isCurrency(value SummaryValue, expectedCurrency string) bool {
+	return isMonetary(value) && strings.EqualFold(value.Unit, expectedCurrency)
 }
 
 func isUSD(value SummaryValue) bool {

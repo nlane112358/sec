@@ -431,35 +431,7 @@ func (s *Store) ScreenExpectationsArbitrage(ctx context.Context, ranked []Ranked
 			}
 			continue
 		}
-		marketCap := valuationForTicker(marketCaps, company.Ticker)
-		if !finite(marketCap) || marketCap <= 0 {
-			marketCap = 0
-			price := valuationForTicker(prices, company.Ticker)
-			if finite(price) && price > 0 {
-				var shareCount float64
-				for _, metricName := range []string{"Shares Outstanding", "Diluted Weighted Average Shares"} {
-					values := metricValues(summary, metricName)
-					for index := 0; index < len(summary.Periods) && index < len(values); index++ {
-						value := values[index]
-						if isShareCount(value) && finite(value.Value) && value.Value > 0 {
-							shareCount = value.Value
-							break
-						}
-					}
-					if shareCount > 0 {
-						break
-					}
-				}
-				if shareCount <= 0 {
-					if databaseShares, ok := s.LatestShareCount(ctx, company.Ticker); ok {
-						shareCount = databaseShares
-					}
-				}
-				if shareCount > 0 {
-					marketCap = price * shareCount
-				}
-			}
-		}
+		marketCap := ResolveMarketCap(s, ctx, summary, company.Ticker, marketCaps, prices)
 		if !finite(marketCap) || marketCap <= 0 {
 			continue
 		}

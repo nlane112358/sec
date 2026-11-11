@@ -364,35 +364,7 @@ func (s *Store) ScreenModernGAAPArbitrage(ctx context.Context, tickers []string,
 }
 
 func resolveMarketCap(s *Store, ctx context.Context, summary FinancialSummary, marketCaps, prices map[string]float64) float64 {
-	marketCap := valuationForTicker(marketCaps, summary.Ticker)
-	if !finite(marketCap) || marketCap <= 0 {
-		price := valuationForTicker(prices, summary.Ticker)
-		if finite(price) && price > 0 {
-			var shareCount float64
-			for _, metricName := range []string{"Shares Outstanding", "Diluted Weighted Average Shares"} {
-				values := namedMetric(summary, metricName)
-				for index := 0; index < len(summary.Periods) && index < len(values); index++ {
-					value := values[index]
-					if isShareCount(value) && finite(value.Value) && value.Value > 0 {
-						shareCount = value.Value
-						break
-					}
-				}
-				if shareCount > 0 {
-					break
-				}
-			}
-			if shareCount <= 0 {
-				if databaseShares, ok := s.LatestShareCount(ctx, summary.Ticker); ok {
-					shareCount = databaseShares
-				}
-			}
-			if shareCount > 0 {
-				marketCap = price * shareCount
-			}
-		}
-	}
-	return marketCap
+	return ResolveMarketCap(s, ctx, summary, summary.Ticker, marketCaps, prices)
 }
 
 // WriteModernGAAPTable prints the screening candidates in a formatted ASCII table.

@@ -805,16 +805,21 @@ func formatDCFValue(value float64, unit string) string {
 }
 
 func formatDCFPerShare(value float64, unit string) string {
-	return fmt.Sprintf("%s%.2f", currencySymbol(unit), value)
+	return fmt.Sprintf("%s%.2f", CurrencySymbol(unit), value)
 }
 
 func currencySymbol(unit string) string {
+	return CurrencySymbol(unit)
+}
+
+// CurrencySymbol returns the symbol for common currency units.
+func CurrencySymbol(unit string) string {
 	switch strings.ToUpper(strings.TrimSpace(unit)) {
 	case "USD":
 		return "$"
 	case "EUR":
 		return "€"
-	case "GBP":
+	case "GBP", "GBp":
 		return "£"
 	case "JPY", "CNY":
 		return "¥"
@@ -822,6 +827,14 @@ func currencySymbol(unit string) string {
 		return "C$"
 	case "AUD":
 		return "A$"
+	case "CHF":
+		return "CHF "
+	case "DKK":
+		return "DKK "
+	case "SEK":
+		return "SEK "
+	case "NOK":
+		return "NOK "
 	default:
 		return unit + " "
 	}

@@ -170,7 +170,7 @@ func (s *Store) DiagnoseTicker(ctx context.Context, ticker string, output io.Wri
 		rows, err := s.db.QueryContext(ctx, `
 			SELECT DISTINCT taxonomy, concept, unit, value, form, filing_date
 			FROM sec_facts
-			WHERE cik = ? AND (period_end = ? OR (abs(julianday(period_end) - julianday(?)) <= 105 AND form LIKE '10-K%'))
+			WHERE cik = ? AND (period_end = ? OR (abs(julianday(period_end) - julianday(?)) <= 105 AND (form LIKE '10-K%' OR form LIKE '20-F%' OR form LIKE '40-F%')))
 			ORDER BY taxonomy, concept`, cik, latestEnd, latestEnd)
 		if err != nil {
 			return err
