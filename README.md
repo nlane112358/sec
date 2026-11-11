@@ -87,12 +87,28 @@ The **Peters & Taylor Total Q / Damodaran Intangible Capitalization model** is i
 - **Capitalize R&D & 30% of SG&A**:
   - R&D is capitalized and amortized linearly over 5 years (20% per year).
   - 30% of SG&A is capitalized as brand/organizational capital and amortized linearly over 3 years (33.33% per year).
-- **Core Formulas**:
-  $$\text{Intangible Capital}_t = \sum_{k=0}^4 \left(1 - \frac{k}{5}\right) \text{R\&D}_{t-k} + \sum_{k=0}^2 \left(1 - \frac{k}{3}\right) (0.30 \times \text{SG\&A}_{t-k})$$
-  $$\text{Amortization}_t = \frac{1}{5} \sum_{k=1}^5 \text{R\&D}_{t-k} + \frac{1}{3} \sum_{k=1}^3 (0.30 \times \text{SG\&A}_{t-k})$$
-  $$\text{Adjusted EBIT}_t = \text{Operating Income}_t + \text{R\&D}_t + 0.30 \times \text{SG\&A}_t - \text{Amortization}_t$$
-  $$\text{Adjusted Invested Capital}_t = \text{Stockholders' Equity}_t + \text{Debt}_t - \text{Cash}_t + \text{Intangible Capital}_t$$
-  $$\text{Intangible-Adjusted ROIC}_t = \frac{\text{Adjusted EBIT}_t \times (1 - \text{taxRate})}{\frac{\text{Adjusted Invested Capital}_t + \text{Adjusted Invested Capital}_{t-1}}{2}}$$
+
+**Core Formulas**:
+
+$$
+\text{Intangible Capital}_t = \sum_{k=0}^4 \left(1 - \frac{k}{5}\right) \text{RD}_{t-k} + \sum_{k=0}^2 \left(1 - \frac{k}{3}\right) (0.30 \times \text{SGA}_{t-k})
+$$
+
+$$
+\text{Amortization}_t = \frac{1}{5} \sum_{k=1}^5 \text{RD}_{t-k} + \frac{1}{3} \sum_{k=1}^3 (0.30 \times \text{SGA}_{t-k})
+$$
+
+$$
+\text{Adjusted EBIT}_t = \text{Operating Income}_t + \text{RD}_t + 0.30 \times \text{SGA}_t - \text{Amortization}_t
+$$
+
+$$
+\text{Adjusted Invested Capital}_t = \text{Stockholders' Equity}_t + \text{Debt}_t - \text{Cash}_t + \text{Intangible Capital}_t
+$$
+
+$$
+\text{Intangible-Adjusted ROIC}_t = \frac{\text{Adjusted EBIT}_t \times (1 - \text{taxRate})}{\frac{\text{Adjusted Invested Capital}_t + \text{Adjusted Invested Capital}_{t-1}}{2}}
+$$
 
 Inspect any company's intangible adjustments across 3 to 5 years:
 
@@ -112,8 +128,8 @@ Screen for companies that look unprofitable or "expensive" on standard GAAP metr
 - **Screener Options**:
   - `--min-adj-roic PCT`: Minimum Intangible-Adjusted ROIC (default `15%`).
   - `--min-yield PCT`: Minimum Intangible-Adjusted Owner Earnings Yield (`(FCF - SBC + Net Intangible Investment) / Market Cap`, default `3.5%`; pass `0` to screen without valuation).
-  - `--surging`: Require expanding Adjusted ROIC (latest > prior year or 3Y average, or ROIC spread $\ge 5\%$).
-  - `--screen-expensive`: Require company to appear expensive or unprofitable under GAAP (GAAP P/E $\ge 25$, negative P/E / GAAP loss, or ROIC spread $\ge 5\%$).
+  - `--surging`: Require expanding Adjusted ROIC (latest > prior year or 3Y average, or ROIC spread ≥ 5%).
+  - `--screen-expensive`: Require company to appear expensive or unprofitable under GAAP (GAAP P/E ≥ 25, negative P/E / GAAP loss, or ROIC spread ≥ 5%).
   - `--max-gaap-roic PCT`: Cap standard GAAP ROIC to isolate firms where GAAP expensing creates the widest distortion.
   - `--sort yield|roic|spread|score`: Sort table by Owner Yield, Adjusted ROIC, ROIC Delta spread, or composite arbitrage score.
   - `--prices FILE` / `--fetch-prices`: Supply valuation file or pull live market prices from Yahoo Finance / Stooq.
@@ -186,14 +202,6 @@ Most financial websites and retail screeners fail Buffett's tests because they r
 
 Here is the exact step-by-step workflow Warren Buffett (or his investment lieutenants Todd Combs and Ted Weschler) would run to find undervalued, high-moat businesses:
 
-```mermaid
-flowchart TD
-    A["1. Sync Universe<br><code>sec sync --universe sp500.txt</code>"] --> B["2. Screen for Moats & Compounding<br><code>sec rank --exclude-financials</code>"]
-    B --> C["3. Expectations Arbitrage & Margin of Safety<br><code>sec arbitrage --require-buybacks</code>"]
-    C --> D["4. Uncover Hidden Intangibles<br><code>sec gaap-arbitrage --surging</code>"]
-    D --> E["5. In-Depth 10-K Due Diligence<br><code>sec summary</code>, <code>sec audit</code> & <code>sec read</code>"]
-```
-
 #### Step 1: Ingest the Primary Data
 Buffett starts with a broad universe of established companies, downloading raw XBRL facts directly from the SEC:
 ```sh
@@ -255,6 +263,118 @@ Before investing a dollar, Buffett sits in his armchair in Omaha and reads the p
 4. **Circle of Competence**: Can you understand the product, customer behavior, and industry structure 10 years from now?
 
 If a company passes all five steps, it earns a spot in the portfolio.
+
+---
+
+### 3. Investment Decision Engine: The 3-Gate Filter
+
+Before allocating capital, run candidates through three sequential gates generated directly by the tool's metrics:
+
+`Raw EDGAR Universe` ➔ **Gate 1: Quality Filter** (`sec rank`) ➔ **Gate 2: Capital Allocation** (`sec summary`) ➔ **Gate 3: Margin of Safety** (`sec arbitrage`) ➔ **Actionable Buy Candidate**
+
+#### Gate 1: The "Wonderful Business" Quality Test (`sec rank`)
+*Buffett: "Time is the friend of the wonderful business, the enemy of the mediocre."*
+- **5-Year Average ROIC $\ge 15\%$** (or **ROE $\ge 18\%$** for financials): Confirms a durable economic moat and pricing power.
+- **Operating Margin Consistency $\ge 85–100\%$**: Proves the moat held through macroeconomic downturns.
+- **Balance Sheet Solvency (`Net Cash / Assets` or low debt-to-EBIT)**: Ensures the business never depends on capital markets to survive.
+
+#### Gate 2: Capital Allocation & Dilution Integrity (`sec summary`)
+*Buffett: "Does management act like true owners or promoters?"*
+- **Share Count Reduction (Cannibals)**: Five-year diluted share count must be flat or declining (e.g., Apple retiring 3–4% of shares per year).
+- **The SBC Dilution Check**: Compare `Free Cash Flow` to `SBC-Adjusted FCF Proxy` in `./sec summary`. If Stock-Based Compensation consumes more than 20–25% of FCF, management is diluting shareholders to mask compensation expenses.
+
+#### Gate 3: Valuation via Inversion (`sec arbitrage` & `sec gaap-arbitrage`)
+*Buffett: "Price is what you pay; value is what you get."*
+- **Positive Alpha Spread ($\ge 4–6\%$)**: The company's 5-year historical owner-earnings growth exceeds the growth rate implied by its current market cap ($g_{\text{hist}} - g_{\text{implied}} > 0$).
+- **Intangible Owner Yield Hurdle**: In `./sec gaap-arbitrage`, require the adjusted owner earnings yield to exceed the risk-free rate plus an equity spread:
+
+$$
+\text{Intangible Owner Yield} \ge \text{10Y Treasury Yield (4.84\%)} + 2.0\% \approx 6.8\%–7.0\%
+$$
+
+---
+
+### 4. Holding Periods & The Sell Discipline
+
+> *"When we own portions of outstanding businesses with outstanding managements, our favorite holding period is forever."*  
+> — **Warren Buffett**, 1988 Shareholder Letter
+
+#### Why Multi-Year Holding Periods Compound Wealth
+1. **Uninterrupted Internal Compounding**: A business generating 20% ROIC that reinvests 50% of its cash back into operations compounds intrinsic value at $10\%$ per year ($20\% \times 50\%$).
+2. **The Interest-Free Government Loan (Tax Deferral)**: Selling every 12 months incurs a 20–30% capital gains tax friction. Holding for 10–20 years lets the untaxed compounding grow, creating an enormous tax-deferred compounding asset.
+
+#### The Annual SEC Maintenance Checkup
+Once a position is entered, ignore day-to-day stock price fluctuations. Instead, run an annual audit when the new 10-K is filed:
+
+```sh
+# Review the multi-year trajectory
+./sec summary TICKER --years 5
+
+# Verify disclosure integrity and accounting consistency
+./sec audit TICKER
+
+# Read the MD&A and footnotes
+./sec read TICKER
+```
+
+#### The Only 3 Justifiable Sell Triggers
+Buffett and Munger advise selling only under three strict conditions:
+
+| Sell Condition | Signal in the Tool | Action |
+| :--- | :--- | :--- |
+| **1. Permanent Moat Decay** | 3-year trailing ROIC drops below cost of capital (WACC), operating margins compress across multiple years, or SBC balloons without revenue growth. | **Sell completely**: The thesis is broken. Cut losses without sentiment. |
+| **2. Grotesque Market Overvaluation** | Reverse DCF (`./sec dcf --reverse`) indicates Mr. Market is pricing in sustained $\ge 25–30\%$ annual growth for a mega-cap, requiring mathematically impossible market share. | **Trim or Reallocate**: Buffett did this selectively with Apple in 2024 when valuations reached extreme multiples. |
+| **3. Superior Opportunity Cost** | Charlie Munger's rule: You discover another wonderful business meeting all 3 Gates with double the expected Owner Yield and margin of safety. | **Reallocate** capital from lower-conviction to higher-conviction compounders. |
+
+---
+
+### 5. Portfolio Allocation & Sizing (The "Punch Card" Model)
+
+Buffett vigorously opposes conventional Modern Portfolio Theory (holding 50–100 positions to eliminate volatility). He views volatility as opportunity, not risk. Risk is the **permanent impairment of capital**.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Tier 1: Core Franchise Anchors (40% - 60% of capital)      │
+│  • 3 to 5 positions (10% - 20% each)                        │
+│  • Elite ROIC (>20%), pristine balance sheet, cannibals     │
+├─────────────────────────────────────────────────────────────┤
+│  Tier 2: Mispriced Value & Modern GAAP Arbitrage (20% - 30%)│
+│  • 4 to 6 positions (4% - 8% each)                          │
+│  • Large Alpha Spread, temporary pessimism, brand/R&D power │
+├─────────────────────────────────────────────────────────────┤
+│  Tier 3: Cash & Short-Term Treasuries (10% - 25%)           │
+│  • Dry powder call option for panics                        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### 1. Tier 1: Core Franchise Anchors (40%–60% of Portfolio)
+- **Number of Positions**: 3 to 5 companies (10% to 20% position sizes).
+- **Profile**: Businesses that score $\ge 80$ in `./sec rank`, demonstrate pricing power through inflation, have high intangible brand/R&D moats, and maintain net cash or manageable debt.
+- **Examples**: Apple, Microsoft, Moody's, Berkshire Hathaway, Visa.
+- **Holding Period**: Indefinite (decades).
+
+#### 2. Tier 2: Mispriced Value & Modern GAAP Arbitrage (20%–30% of Portfolio)
+- **Number of Positions**: 4 to 6 companies (4% to 8% position sizes).
+- **Profile**: Companies identified by `./sec arbitrage` and `./sec gaap-arbitrage` where Mr. Market is pricing in near-zero or negative growth due to cyclical headwinds or because GAAP expenses their brand/R&D investments.
+- **Holding Period**: 3 to 7 years (until market expectations re-rate to historical compounding reality).
+
+#### 3. Tier 3: Cash & Treasury "Dry Powder" (10%–25% of Portfolio)
+- **Role**: Cash is not dead money—at current 10Y risk-free rates (~4.5–4.8%), it earns a respectable real return.
+- **Psychological Function**: Buffett always holds tens of billions in cash (over $300B at Berkshire in 2026) because it represents an **aggressive call option on market crashes**.
+- **Execution**: When a market panic or industry sell-off occurs, use this cash to back up the truck on Tier 1 and Tier 2 compounders whose implied growth turns negative.
+
+---
+
+### 6. The Complete Investor Lifecycle
+
+| Phase | Objective | CLI Commands |
+| :--- | :--- | :--- |
+| **Discovery** | Screen entire universe for elite capital allocators | `./sec rank --universe sp500.txt --exclude-financials` |
+| **Valuation** | Demand margin of safety; invert market expectations | `./sec arbitrage --fetch-prices --min-score 75 --min-roic 15`<br>`./sec gaap-arbitrage --fetch-prices --surging` |
+| **Due Diligence** | Verify disclosures and read 10-K cover to cover | `./sec summary TICKER`<br>`./sec audit TICKER`<br>`./sec read TICKER` |
+| **Sizing** | Allocate 10–20% for Core Franchises; 5–8% for Arbitrage | Tiered punch-card framework |
+| **Monitoring** | Annual 10-K checkup: confirm ROIC & owner earnings hold | `./sec summary TICKER --years 5` |
+| **Exit** | Sell only if moat deteriorates or valuation turns absurd | `./sec dcf TICKER --reverse` |
 
 ---
 
