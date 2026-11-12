@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"sec/internal/edgar"
 	"sec/internal/fundamentals"
 	"sec/internal/market"
 	"sec/internal/screener"
@@ -26,25 +27,52 @@ import (
 var secDocumentName = regexp.MustCompile(`^[A-Za-z0-9_.~%-]+$`)
 
 type quoteEntry struct {
-	price float64
+	price  float64
+	high52 float64
+	low52  float64
+	asOf   time.Time
+}
+
+type cachedSummary struct {
+	response SummaryResponse
+	asOf     time.Time
+}
+
+type cachedFilings struct {
+	items []FilingItem
 	asOf  time.Time
 }
 
+type cachedDiff struct {
+	result fundamentals.FilingDiffResult
+	asOf   time.Time
+}
+
 type Server struct {
-	storePath   string
-	store       *store.Store
-	staticFS    fs.FS
-	staticDir   string
-	rankMu      sync.RWMutex
-	cachedRank  *screener.RankResult
-	rankTime    time.Time
-	statsMu     sync.RWMutex
-	cachedStats *StatsResponse
-	quoteMu     sync.RWMutex
-	quoteCache  map[string]quoteEntry
-	gaapArbMu   sync.RWMutex
-	cachedArb   []screener.ModernGAAPCandidate
-	arbTime     time.Time
+	storePath      string
+	store          *store.Store
+	staticFS       fs.FS
+	staticDir      string
+	startTime      time.Time
+	edgarClient    *edgar.Client
+	filingCacheDir string
+	rankMu         sync.RWMutex
+	cachedRank     *screener.RankResult
+	rankTime       time.Time
+	statsMu        sync.RWMutex
+	cachedStats    *StatsResponse
+	statsTime      time.Time
+	quoteMu        sync.RWMutex
+	quoteCache     map[string]quoteEntry
+	gaapArbMu      sync.RWMutex
+	cachedArb      []screener.ModernGAAPCandidate
+	arbTime        time.Time
+	summaryMu      sync.RWMutex
+	summaryCache   map[string]cachedSummary
+	filingsMu      sync.RWMutex
+	filingsCache   map[string]cachedFilings
+	diffMu         sync.RWMutex
+	diffCache      map[string]cachedDiff
 }
 
 func NewServer(storePath string, staticDir string, staticFS fs.FS) (*Server, error) {
@@ -53,12 +81,25 @@ func NewServer(storePath string, staticDir string, staticFS fs.FS) (*Server, err
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite store %s: %w", storePath, err)
 	}
+	ua := os.Getenv("SEC_USER_AGENT")
+	if strings.TrimSpace(ua) == "" {
+		ua = "SECAnalysisApp research@secanalysis.local"
+	}
+	filingDir := filepath.Join(filepath.Dir(storePath), "filings")
+	_ = os.MkdirAll(filingDir, 0755)
+
 	srv := &Server{
-		storePath:  storePath,
-		store:      s,
-		staticFS:   staticFS,
-		staticDir:  staticDir,
-		quoteCache: make(map[string]quoteEntry),
+		storePath:      storePath,
+		store:          s,
+		staticFS:       staticFS,
+		staticDir:      staticDir,
+		startTime:      time.Now(),
+		edgarClient:    edgar.NewClient(ua),
+		filingCacheDir: filingDir,
+		quoteCache:     make(map[string]quoteEntry),
+		summaryCache:   make(map[string]cachedSummary),
+		filingsCache:   make(map[string]cachedFilings),
+		diffCache:      make(map[string]cachedDiff),
 	}
 
 	// Initialize stats quickly using max(rowid) instead of full table scans
@@ -114,11 +155,14 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	// API endpoints
+	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("GET /api/companies", s.handleCompanies)
 	mux.HandleFunc("GET /api/company/{ticker}/summary", s.handleCompanySummary)
 	mux.HandleFunc("GET /api/company/{ticker}/dcf", s.handleCompanyDCF)
 	mux.HandleFunc("GET /api/company/{ticker}/reverse-dcf", s.handleCompanyReverseDCF)
 	mux.HandleFunc("GET /api/company/{ticker}/filings", s.handleCompanyFilings)
+	mux.HandleFunc("GET /api/company/{ticker}/filing-html", s.handleFilingHTML)
+	mux.HandleFunc("GET /api/company/{ticker}/filings/diff", s.handleFilingsDiff)
 	mux.HandleFunc("GET /api/company/{ticker}/quote", s.handleCompanyQuote)
 	mux.HandleFunc("GET /api/company/{ticker}/audit", s.handleCompanyAudit)
 	mux.HandleFunc("GET /api/screener/rank", s.handleScreenerRank)
@@ -136,20 +180,22 @@ func (s *Server) Handler() http.Handler {
 	// Static files / SPA fallback
 	mux.HandleFunc("GET /", s.handleSPA)
 
-	return s.corsMiddleware(mux)
-}
+	// Chain institutional middleware pipeline:
+	// 1. recovery (top-level panic barrier)
+	// 2. logging (latency & request metrics)
+	// 3. cors (cross-origin headers & preflight)
+	// 4. cacheControl (conditional cache policies)
+	// 5. gzip (transparent HTTP compression)
+	// 6. etag (SHA-256 entity hashing & 304 Not Modified)
+	var handler http.Handler = mux
+	handler = etagMiddleware(handler)
+	handler = gzipMiddleware(handler)
+	handler = cacheControlMiddleware(handler)
+	handler = corsMiddleware(handler)
+	handler = loggingMiddleware(handler)
+	handler = recoveryMiddleware(handler)
 
-func (s *Server) corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+	return handler
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {
@@ -238,9 +284,26 @@ func (s *Server) handleCompanySummary(w http.ResponseWriter, r *http.Request) {
 
 	years := 5
 	if yStr := r.URL.Query().Get("years"); yStr != "" {
-		if y, err := strconv.Atoi(yStr); err == nil && y >= 3 && y <= 5 {
+		if y, err := strconv.Atoi(yStr); err == nil && y >= 3 && y <= 10 {
 			years = y
 		}
+	}
+
+	view := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("view")))
+	quarters := 8
+	if qStr := r.URL.Query().Get("quarters"); qStr != "" {
+		if q, err := strconv.Atoi(qStr); err == nil && q >= 1 && q <= 16 {
+			quarters = q
+		}
+	}
+
+	cacheKey := fmt.Sprintf("%s:%s:%d:%d", ticker, view, years, quarters)
+	s.summaryMu.RLock()
+	cached, found := s.summaryCache[cacheKey]
+	s.summaryMu.RUnlock()
+	if found && time.Since(cached.asOf) < 10*time.Minute {
+		writeJSON(w, http.StatusOK, cached.response)
+		return
 	}
 
 	cik, name, savedTicker, err := s.store.CompanyForTicker(r.Context(), ticker)
@@ -255,18 +318,11 @@ func (s *Server) handleCompanySummary(w http.ResponseWriter, r *http.Request) {
 	var sic, sicDesc string
 	_ = s.store.DB().QueryRowContext(r.Context(), "SELECT sic, sic_description FROM sec_companies WHERE cik = ?", cik).Scan(&sic, &sicDesc)
 
-	view := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("view")))
 	var summary fundamentals.FinancialSummary
 	var inflections []fundamentals.QuarterlyInflection
 
 	switch view {
 	case "quarterly", "q":
-		quarters := 8
-		if qStr := r.URL.Query().Get("quarters"); qStr != "" {
-			if q, err := strconv.Atoi(qStr); err == nil && q >= 1 && q <= 16 {
-				quarters = q
-			}
-		}
 		summary, err = fundamentals.LoadQuarterlySummary(r.Context(), s.store, quarters, ticker)
 	case "ttm":
 		summary, err = fundamentals.LoadTTMFinancialSummary(r.Context(), s.store, ticker)
@@ -297,6 +353,13 @@ func (s *Server) handleCompanySummary(w http.ResponseWriter, r *http.Request) {
 		Intangibles:    intangibles,
 		Inflections:    inflections,
 	}
+
+	s.summaryMu.Lock()
+	s.summaryCache[cacheKey] = cachedSummary{
+		response: res,
+		asOf:     time.Now(),
+	}
+	s.summaryMu.Unlock()
 
 	writeJSON(w, http.StatusOK, res)
 }
@@ -601,13 +664,22 @@ func (s *Server) handleCompanyFilings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	formFilter := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("form")))
+
+	cacheKey := fmt.Sprintf("%s:%s", ticker, formFilter)
+	s.filingsMu.RLock()
+	cached, found := s.filingsCache[cacheKey]
+	s.filingsMu.RUnlock()
+	if found && time.Since(cached.asOf) < 15*time.Minute {
+		writeJSON(w, http.StatusOK, cached.items)
+		return
+	}
+
 	filings, err := s.store.LoadFilings(r.Context(), ticker)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("load filings: %v", err))
 		return
 	}
-
-	formFilter := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("form")))
 
 	items := make([]FilingItem, 0, len(filings))
 	for _, f := range filings {
@@ -627,6 +699,13 @@ func (s *Server) handleCompanyFilings(w http.ResponseWriter, r *http.Request) {
 		items = append(items, item)
 	}
 
+	s.filingsMu.Lock()
+	s.filingsCache[cacheKey] = cachedFilings{
+		items: items,
+		asOf:  time.Now(),
+	}
+	s.filingsMu.Unlock()
+
 	writeJSON(w, http.StatusOK, items)
 }
 
@@ -644,6 +723,335 @@ func buildFilingURL(filing store.Filing) string {
 		return ""
 	}
 	return fmt.Sprintf("https://www.sec.gov/Archives/edgar/data/%d/%s/%s", numericCIK, accessionDigits, url.PathEscape(primaryDoc))
+}
+
+func (s *Server) getFilingHTML(ctx context.Context, cik, accession, primaryDoc string) ([]byte, string, error) {
+	numericCIK, err := strconv.ParseUint(strings.TrimSpace(cik), 10, 64)
+	if err != nil || numericCIK == 0 {
+		return nil, "", fmt.Errorf("invalid CIK: %s", cik)
+	}
+	accessionDigits := strings.ReplaceAll(strings.TrimSpace(accession), "-", "")
+	if len(accessionDigits) != 18 {
+		return nil, "", fmt.Errorf("invalid accession number: %s", accession)
+	}
+	primaryDoc = path.Clean(strings.TrimSpace(primaryDoc))
+	if primaryDoc == "." || primaryDoc == "" || strings.HasPrefix(primaryDoc, "..") || !secDocumentName.MatchString(primaryDoc) {
+		return nil, "", fmt.Errorf("invalid primary document: %s", primaryDoc)
+	}
+
+	secURL := fmt.Sprintf("https://www.sec.gov/Archives/edgar/data/%d/%s/%s", numericCIK, accessionDigits, url.PathEscape(primaryDoc))
+	cacheKey := fmt.Sprintf("%s_%s_%s", cik, accessionDigits, primaryDoc)
+	cacheFile := filepath.Join(s.filingCacheDir, cacheKey)
+
+	if data, err := os.ReadFile(cacheFile); err == nil && len(data) > 0 {
+		return data, secURL, nil
+	}
+
+	data, err := s.edgarClient.FetchDocument(ctx, secURL)
+	if err != nil {
+		return nil, secURL, fmt.Errorf("fetch SEC filing: %w", err)
+	}
+
+	_ = os.WriteFile(cacheFile, data, 0644)
+	return data, secURL, nil
+}
+
+func (s *Server) handleFilingHTML(w http.ResponseWriter, r *http.Request) {
+	ticker := strings.ToUpper(strings.TrimSpace(r.PathValue("ticker")))
+	if ticker == "" {
+		writeError(w, http.StatusBadRequest, "ticker is required")
+		return
+	}
+
+	cik, _, savedTicker, err := s.store.CompanyForTicker(r.Context(), ticker)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "company not found")
+		return
+	}
+	if savedTicker != "" {
+		ticker = savedTicker
+	}
+
+	accession := strings.TrimSpace(r.URL.Query().Get("accession"))
+	concept := strings.TrimSpace(r.URL.Query().Get("concept"))
+	period := strings.TrimSpace(r.URL.Query().Get("period"))
+
+	var filing store.Filing
+	if accession != "" {
+		filings, err := s.store.LoadFilings(r.Context(), ticker)
+		if err == nil {
+			for _, f := range filings {
+				if strings.EqualFold(f.Accession, accession) {
+					filing = f
+					break
+				}
+			}
+		}
+	}
+
+	if filing.Accession == "" {
+		filings, err := s.store.LoadFilings(r.Context(), ticker)
+		if err != nil || len(filings) == 0 {
+			writeError(w, http.StatusNotFound, "no filings found for ticker")
+			return
+		}
+		for _, f := range filings {
+			if strings.EqualFold(f.Form, "10-K") || strings.EqualFold(f.Form, "20-F") {
+				filing = f
+				break
+			}
+		}
+		if filing.Accession == "" {
+			filing = filings[0]
+		}
+	}
+
+	rawHTML, _, err := s.getFilingHTML(r.Context(), cik, filing.Accession, filing.PrimaryDocument)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("load filing HTML: %v", err))
+		return
+	}
+
+	numericCIK, _ := strconv.ParseUint(strings.TrimSpace(cik), 10, 64)
+	accessionDigits := strings.ReplaceAll(strings.TrimSpace(filing.Accession), "-", "")
+	baseURL := fmt.Sprintf("https://www.sec.gov/Archives/edgar/data/%d/%s/", numericCIK, accessionDigits)
+
+	htmlStr := string(rawHTML)
+	baseTag := fmt.Sprintf("<base href=\"%s\" target=\"_blank\">", baseURL)
+	highlightInjection := fmt.Sprintf(`
+<style>
+.sec-provenance-highlight {
+    background-color: rgba(245, 158, 11, 0.45) !important;
+    outline: 3px solid #f59e0b !important;
+    border-radius: 4px !important;
+    box-shadow: 0 0 15px rgba(245, 158, 11, 0.6) !important;
+    transition: all 0.3s ease-in-out !important;
+}
+.sec-provenance-row {
+    background-color: rgba(245, 158, 11, 0.15) !important;
+}
+</style>
+<script>
+window.addEventListener('DOMContentLoaded', () => {
+    const targetConcept = "%s";
+    const targetPeriod = "%s";
+    const cleanConcept = targetConcept.includes(':') ? targetConcept.split(':')[1] : targetConcept;
+    let target = null;
+    if (cleanConcept) {
+        const query = "[name*='" + cleanConcept + "']";
+        const matches = document.querySelectorAll(query);
+        if (matches.length > 0) {
+            target = matches[0];
+            matches.forEach(el => {
+                el.classList.add('sec-provenance-highlight');
+                const tr = el.closest('tr');
+                if (tr) tr.classList.add('sec-provenance-row');
+            });
+        }
+    }
+    if (!target && cleanConcept) {
+        const words = cleanConcept.replace(/([A-Z])/g, ' $1').trim().toLowerCase();
+        const cells = document.querySelectorAll('td, th, span');
+        for (const cell of cells) {
+            if (cell.textContent && cell.textContent.toLowerCase().includes(words)) {
+                target = cell;
+                cell.classList.add('sec-provenance-highlight');
+                const tr = cell.closest('tr');
+                if (tr) tr.classList.add('sec-provenance-row');
+                break;
+            }
+        }
+    }
+    if (target) {
+        setTimeout(() => {
+            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 300);
+    }
+});
+</script>
+`, templateEscape(concept), templateEscape(period))
+
+	if idx := strings.Index(strings.ToLower(htmlStr), "<head>"); idx != -1 {
+		htmlStr = htmlStr[:idx+6] + baseTag + highlightInjection + htmlStr[idx+6:]
+	} else {
+		htmlStr = baseTag + highlightInjection + htmlStr
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Del("X-Frame-Options")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(htmlStr))
+}
+
+func (s *Server) handleFilingsDiff(w http.ResponseWriter, r *http.Request) {
+	ticker := strings.ToUpper(strings.TrimSpace(r.PathValue("ticker")))
+	if ticker == "" {
+		writeError(w, http.StatusBadRequest, "ticker is required")
+		return
+	}
+
+	cik, _, savedTicker, err := s.store.CompanyForTicker(r.Context(), ticker)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "company not found")
+		return
+	}
+	if savedTicker != "" {
+		ticker = savedTicker
+	}
+
+	itemType := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("item")))
+	if itemType != "7" {
+		itemType = "1A"
+	}
+	itemTitle := "Item 1A. Risk Factors"
+	if itemType == "7" {
+		itemTitle = "Item 7. Management's Discussion and Analysis"
+	}
+
+	currentAcc := strings.TrimSpace(r.URL.Query().Get("current"))
+	priorAcc := strings.TrimSpace(r.URL.Query().Get("prior"))
+
+	filings, err := s.store.LoadFilings(r.Context(), ticker)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("load filings: %v", err))
+		return
+	}
+
+	var tenKs []store.Filing
+	for _, f := range filings {
+		if strings.EqualFold(f.Form, "10-K") || strings.EqualFold(f.Form, "20-F") {
+			tenKs = append(tenKs, f)
+		}
+	}
+	if len(tenKs) < 2 {
+		writeError(w, http.StatusBadRequest, "at least two 10-K filings are required to compute a redline diff")
+		return
+	}
+
+	var currentFiling, priorFiling store.Filing
+	if currentAcc != "" {
+		for _, f := range tenKs {
+			if strings.EqualFold(f.Accession, currentAcc) {
+				currentFiling = f
+				break
+			}
+		}
+	}
+	if currentFiling.Accession == "" {
+		currentFiling = tenKs[0]
+	}
+
+	if priorAcc != "" {
+		for _, f := range tenKs {
+			if strings.EqualFold(f.Accession, priorAcc) {
+				priorFiling = f
+				break
+			}
+		}
+	}
+	if priorFiling.Accession == "" {
+		for idx, f := range tenKs {
+			if f.Accession == currentFiling.Accession && idx+1 < len(tenKs) {
+				priorFiling = tenKs[idx+1]
+				break
+			}
+		}
+		if priorFiling.Accession == "" {
+			priorFiling = tenKs[1]
+		}
+	}
+
+	cacheKey := fmt.Sprintf("%s:%s:%s:%s", ticker, itemType, currentFiling.Accession, priorFiling.Accession)
+	s.diffMu.RLock()
+	cached, found := s.diffCache[cacheKey]
+	s.diffMu.RUnlock()
+	if found && time.Since(cached.asOf) < 30*time.Minute {
+		writeJSON(w, http.StatusOK, cached.result)
+		return
+	}
+
+	currentRaw, _, errCurr := s.getFilingHTML(r.Context(), cik, currentFiling.Accession, currentFiling.PrimaryDocument)
+	if errCurr != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("load current 10-K HTML (%s): %v", currentFiling.Accession, errCurr))
+		return
+	}
+
+	priorRaw, _, errPrior := s.getFilingHTML(r.Context(), cik, priorFiling.Accession, priorFiling.PrimaryDocument)
+	if errPrior != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("load prior 10-K HTML (%s): %v", priorFiling.Accession, errPrior))
+		return
+	}
+
+	currParagraphs := fundamentals.ExtractItemFromHTML(string(currentRaw), itemType)
+	priorParagraphs := fundamentals.ExtractItemFromHTML(string(priorRaw), itemType)
+
+	diffItems, stats := fundamentals.ComputeDiff(priorParagraphs, currParagraphs)
+
+	available := make([]fundamentals.FilingVersion, len(tenKs))
+	for i, f := range tenKs {
+		year := ""
+		if len(f.FilingDate) >= 4 {
+			year = f.FilingDate[:4]
+		}
+		available[i] = fundamentals.FilingVersion{
+			Accession:       f.Accession,
+			FilingDate:      f.FilingDate,
+			ReportDate:      f.ReportDate,
+			Form:            f.Form,
+			PrimaryDocument: f.PrimaryDocument,
+			Year:            year,
+		}
+	}
+
+	currYear := ""
+	if len(currentFiling.FilingDate) >= 4 {
+		currYear = currentFiling.FilingDate[:4]
+	}
+	priorYear := ""
+	if len(priorFiling.FilingDate) >= 4 {
+		priorYear = priorFiling.FilingDate[:4]
+	}
+
+	result := fundamentals.FilingDiffResult{
+		Ticker:    ticker,
+		Item:      itemType,
+		ItemTitle: itemTitle,
+		CurrentFiling: fundamentals.FilingVersion{
+			Accession:       currentFiling.Accession,
+			FilingDate:      currentFiling.FilingDate,
+			ReportDate:      currentFiling.ReportDate,
+			Form:            currentFiling.Form,
+			PrimaryDocument: currentFiling.PrimaryDocument,
+			Year:            currYear,
+		},
+		PriorFiling: fundamentals.FilingVersion{
+			Accession:       priorFiling.Accession,
+			FilingDate:      priorFiling.FilingDate,
+			ReportDate:      priorFiling.ReportDate,
+			Form:            priorFiling.Form,
+			PrimaryDocument: priorFiling.PrimaryDocument,
+			Year:            priorYear,
+		},
+		Available10KFilings: available,
+		Stats:               stats,
+		DiffItems:           diffItems,
+	}
+
+	s.diffMu.Lock()
+	s.diffCache[cacheKey] = cachedDiff{
+		result: result,
+		asOf:   time.Now(),
+	}
+	s.diffMu.Unlock()
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+func templateEscape(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	s = strings.ReplaceAll(s, "\n", " ")
+	return s
 }
 
 func (s *Server) handleScreenerRank(w http.ResponseWriter, r *http.Request) {
@@ -716,6 +1124,8 @@ func (s *Server) handleScreenerGAAPArbitrage(w http.ResponseWriter, r *http.Requ
 type QuoteResponse struct {
 	Ticker   string  `json:"ticker"`
 	Price    float64 `json:"price"`
+	High52   float64 `json:"high_52,omitempty"`
+	Low52    float64 `json:"low_52,omitempty"`
 	Currency string  `json:"currency"`
 	AsOf     string  `json:"as_of"`
 }
@@ -735,28 +1145,44 @@ func (s *Server) handleCompanyQuote(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, QuoteResponse{
 			Ticker:   ticker,
 			Price:    entry.price,
+			High52:   entry.high52,
+			Low52:    entry.low52,
 			Currency: "USD",
 			AsOf:     entry.asOf.Format(time.RFC3339),
 		})
 		return
 	}
 
-	prices := market.FetchLivePrices(r.Context(), []string{ticker}, nil)
-	price := prices[ticker]
+	quote, err := market.FetchLiveQuote(r.Context(), ticker)
+	price := quote.Price
+	if err != nil || price <= 0 {
+		prices := market.FetchLivePrices(r.Context(), []string{ticker}, nil)
+		price = prices[ticker]
+		quote.Price = price
+	}
 
 	s.quoteMu.Lock()
 	if price > 0 {
-		s.quoteCache[ticker] = quoteEntry{price: price, asOf: time.Now()}
+		s.quoteCache[ticker] = quoteEntry{
+			price:  price,
+			high52: quote.High52,
+			low52:  quote.Low52,
+			asOf:   time.Now(),
+		}
 	}
 	s.quoteMu.Unlock()
 
 	if price <= 0 && found {
 		price = entry.price
+		quote.High52 = entry.high52
+		quote.Low52 = entry.low52
 	}
 
 	writeJSON(w, http.StatusOK, QuoteResponse{
 		Ticker:   ticker,
 		Price:    price,
+		High52:   quote.High52,
+		Low52:    quote.Low52,
 		Currency: "USD",
 		AsOf:     time.Now().Format(time.RFC3339),
 	})
@@ -835,17 +1261,20 @@ type StatsResponse struct {
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	s.statsMu.RLock()
 	stats := s.cachedStats
+	statsTime := s.statsTime
 	s.statsMu.RUnlock()
 
-	if stats != nil {
+	// Short 1-second throttle to avoid hammering SQLite during high-frequency polling,
+	// while ensuring numbers automatically update as new companies/facts are synced.
+	if stats != nil && time.Since(statsTime) < 1*time.Second {
 		writeJSON(w, http.StatusOK, stats)
 		return
 	}
 
 	var totalCompanies, totalFilings, totalFacts int
 	_ = s.store.DB().QueryRowContext(r.Context(), "SELECT count(*) FROM sec_companies").Scan(&totalCompanies)
-	_ = s.store.DB().QueryRowContext(r.Context(), "SELECT max(rowid) FROM sec_filings").Scan(&totalFilings)
-	_ = s.store.DB().QueryRowContext(r.Context(), "SELECT max(rowid) FROM sec_facts").Scan(&totalFacts)
+	_ = s.store.DB().QueryRowContext(r.Context(), "SELECT coalesce(max(rowid), 0) FROM sec_filings").Scan(&totalFilings)
+	_ = s.store.DB().QueryRowContext(r.Context(), "SELECT coalesce(max(rowid), 0) FROM sec_facts").Scan(&totalFacts)
 
 	newStats := &StatsResponse{
 		TotalCompanies: totalCompanies,
@@ -856,9 +1285,43 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 
 	s.statsMu.Lock()
 	s.cachedStats = newStats
+	s.statsTime = time.Now()
 	s.statsMu.Unlock()
 
 	writeJSON(w, http.StatusOK, newStats)
+}
+
+type HealthResponse struct {
+	Status   string `json:"status"`
+	Uptime   string `json:"uptime"`
+	Database string `json:"database"`
+	Stats    struct {
+		Companies int `json:"companies"`
+		Filings   int `json:"filings"`
+		Facts     int `json:"facts"`
+	} `json:"stats"`
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	dbStatus := "connected"
+	if err := s.store.DB().PingContext(r.Context()); err != nil {
+		dbStatus = "error: " + err.Error()
+	}
+
+	res := HealthResponse{
+		Status:   "ok",
+		Uptime:   time.Since(s.startTime).Truncate(time.Second).String(),
+		Database: dbStatus,
+	}
+	s.statsMu.RLock()
+	if s.cachedStats != nil {
+		res.Stats.Companies = s.cachedStats.TotalCompanies
+		res.Stats.Filings = s.cachedStats.TotalFilings
+		res.Stats.Facts = s.cachedStats.TotalFacts
+	}
+	s.statsMu.RUnlock()
+
+	writeJSON(w, http.StatusOK, res)
 }
 
 func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {

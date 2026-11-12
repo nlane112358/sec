@@ -1,6 +1,7 @@
 import React from 'react'
 import { SummaryResponse, SummaryValue } from '../types'
 import { formatCurrency, formatPercent } from '../lib/format'
+import { GAAPToEconomicWaterfall } from './GAAPToEconomicWaterfall'
 
 interface IntangiblesViewProps {
   summary: SummaryResponse
@@ -95,6 +96,9 @@ export const IntangiblesView: React.FC<IntangiblesViewProps> = ({ summary, compa
           </div>
         </div>
       </div>
+
+      {/* Interactive GAAP-to-Economic ROIC & NOPAT Waterfall Bridge */}
+      <GAAPToEconomicWaterfall summary={summary} compact={compact} />
 
       {/* Two-Column Structured Reconciliation: Waterfall Bridge + DuPont Tree */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

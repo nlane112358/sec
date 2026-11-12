@@ -23,7 +23,7 @@ func RunSync(parent context.Context, args []string, output, errorOutput io.Write
 	universeFile := flags.String("universe", "", "file containing one ticker per line")
 	workers := flags.Int("workers", 4, "concurrent sync workers (1-4)")
 	skipExisting := flags.Bool("skip-existing", false, "skip companies already present in the database")
-	if err := ParseCommandFlags(flags, args, "data-dir", "ua", "universe", "workers", "skip-existing"); err != nil {
+	if err := ParseCommandFlags(flags, args, "data-dir", "ua", "universe", "workers"); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}

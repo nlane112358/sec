@@ -21,7 +21,7 @@ func RunSummary(parent context.Context, args []string, output, errorOutput io.Wr
 	ttm := flags.Bool("ttm", false, "display Trailing-Twelve-Month (TTM) data and quarterly inflections")
 	view := flags.String("view", "", "view mode: annual, quarterly, or ttm")
 	dataDir := flags.String("data-dir", store.DefaultDirectory(), "directory containing the shared SQLite database")
-	if err := ParseCommandFlags(flags, args, "years", "quarterly", "q", "quarters", "ttm", "view", "data-dir"); err != nil {
+	if err := ParseCommandFlags(flags, args, "years", "quarters", "view", "data-dir"); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}

@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"sec/internal/fundamentals"
 )
 
 func TestFormulaEndpoints(t *testing.T) {
@@ -169,5 +171,125 @@ func TestFormulaEndpoints(t *testing.T) {
 			t.Fatalf("expected universe items, got 0")
 		}
 		t.Logf("Universes loaded: %d universes. First: %s (%d total, %d synced)", len(items), items[0].Name, items[0].Total, items[0].Synced)
+	})
+
+	// 8. Test /api/company/AAPL/quote
+	t.Run("Company quote endpoint", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/company/AAPL/quote", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var q QuoteResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &q); err != nil {
+			t.Fatalf("unmarshal quote: %v", err)
+		}
+		if q.Ticker != "AAPL" {
+			t.Fatalf("expected ticker AAPL, got %s", q.Ticker)
+		}
+		t.Logf("AAPL quote: Price=%.2f, 52W High=%.2f, 52W Low=%.2f", q.Price, q.High52, q.Low52)
+	})
+
+	// 9. Test Summary Values Provenance Enrichment
+	t.Run("Summary Values Provenance", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/company/AAPL/summary", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var summary SummaryResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &summary); err != nil {
+			t.Fatalf("unmarshal summary: %v", err)
+		}
+
+		foundProvenance := false
+		for _, m := range summary.Metrics {
+			for _, v := range m.Values {
+				if v.Present && v.Formula != "" {
+					foundProvenance = true
+					if m.Name == "Research & Development" && v.Concept != "" {
+						t.Logf("Found R&D provenance: concept=%s form=%s filed=%s accession=%s formula=%s",
+							v.Concept, v.Form, v.FilingDate, v.Accession, v.Formula)
+					}
+				}
+			}
+		}
+		if !foundProvenance {
+			t.Fatalf("expected summary values to contain provenance formula")
+		}
+	})
+
+	// 10. Test /api/company/AAPL/filings/diff
+	t.Run("Company filings diff endpoint", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/company/AAPL/filings/diff?item=1A", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var diff fundamentals.FilingDiffResult
+		if err := json.Unmarshal(rec.Body.Bytes(), &diff); err != nil {
+			t.Fatalf("unmarshal diff: %v", err)
+		}
+		if diff.Ticker != "AAPL" {
+			t.Fatalf("expected ticker AAPL, got %s", diff.Ticker)
+		}
+		if diff.Item != "1A" {
+			t.Fatalf("expected item 1A, got %s", diff.Item)
+		}
+		if len(diff.Available10KFilings) < 2 {
+			t.Fatalf("expected at least 2 available 10-K filings, got %d", len(diff.Available10KFilings))
+		}
+		t.Logf("AAPL Item 1A Diff stats: added=%d deleted=%d modified=%d unchanged=%d similarity=%.1f%%",
+			diff.Stats.AddedParagraphs, diff.Stats.DeletedParagraphs, diff.Stats.ModifiedParagraphs, diff.Stats.UnchangedParagraphs, diff.Stats.SimilarityPct)
+	})
+
+	// 10b. Test /api/company/AAPL/filings/diff for Item 7 (MD&A)
+	t.Run("Company filings diff Item 7 endpoint", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/company/AAPL/filings/diff?item=7", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var diff fundamentals.FilingDiffResult
+		if err := json.Unmarshal(rec.Body.Bytes(), &diff); err != nil {
+			t.Fatalf("unmarshal diff: %v", err)
+		}
+		if diff.Item != "7" {
+			t.Fatalf("expected item 7, got %s", diff.Item)
+		}
+		t.Logf("AAPL Item 7 Diff stats: added=%d deleted=%d modified=%d unchanged=%d similarity=%.1f%%",
+			diff.Stats.AddedParagraphs, diff.Stats.DeletedParagraphs, diff.Stats.ModifiedParagraphs, diff.Stats.UnchangedParagraphs, diff.Stats.SimilarityPct)
+	})
+
+	// 11. Test /api/company/AAPL/filing-html
+	t.Run("Company filing HTML proxy endpoint", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/company/AAPL/filing-html?concept=ResearchAndDevelopmentExpense", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		body := rec.Body.String()
+		if !strings.Contains(body, "<base href=") {
+			t.Fatalf("expected HTML to contain injected <base href=> tag")
+		}
+		if !strings.Contains(body, "sec-provenance-highlight") {
+			t.Fatalf("expected HTML to contain sec-provenance-highlight CSS/JS")
+		}
+		t.Logf("AAPL filing HTML served: length=%d bytes, contains highlight script", len(body))
 	})
 }

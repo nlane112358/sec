@@ -8,6 +8,8 @@ interface ShortcutsModalProps {
 
 const shortcuts = [
   { key: '⌘ K', description: 'Open search and command palette' },
+  { key: '⌘ ⇧ S', description: 'Export high-res Tear Sheet PNG card' },
+  { key: '⌘ \\', description: 'Toggle the side-by-side split workspace' },
   { key: '1', description: 'Switch to Financial Statements' },
   { key: '2', description: 'Switch to DCF Valuation Modeler' },
   { key: '3', description: 'Switch to Intangibles & Modern ROIC' },

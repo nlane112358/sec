@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react'
-import { ExternalLink, Copy, Check, ChevronLeft, ChevronRight, ArrowUpRight, Star } from 'lucide-react'
+import { ExternalLink, Copy, Check, ChevronLeft, ChevronRight, ArrowUpRight, Star, BarChart2, Camera } from 'lucide-react'
 import { SummaryResponse, QuoteResponse } from '../types'
 import { TabKey } from './Tabs'
 import { formatCurrency } from '../lib/format'
+import { FootballFieldChart } from './FootballFieldChart'
 
 interface CompanyHeaderProps {
   summary: SummaryResponse | null
@@ -11,6 +12,7 @@ interface CompanyHeaderProps {
   onSelectTab: (tab: TabKey) => void
   isWatched?: boolean
   onToggleWatchlist?: () => void
+  onOpenTearSheet?: () => void
 }
 
 export const CompanyHeader: React.FC<CompanyHeaderProps> = ({
@@ -20,10 +22,12 @@ export const CompanyHeader: React.FC<CompanyHeaderProps> = ({
   onSelectTab,
   isWatched = false,
   onToggleWatchlist,
+  onOpenTearSheet,
 }) => {
   const [copied, setCopied] = useState(false)
   const [quote, setQuote] = useState<QuoteResponse | null>(null)
   const [loadingQuote, setLoadingQuote] = useState(false)
+  const [showFootballField, setShowFootballField] = useState(false)
 
   useEffect(() => {
     if (!summary?.ticker) return
@@ -149,6 +153,18 @@ export const CompanyHeader: React.FC<CompanyHeaderProps> = ({
             <ExternalLink className="w-2.5 h-2.5" />
           </a>
 
+          {onOpenTearSheet && (
+            <button
+              onClick={onOpenTearSheet}
+              className="flex items-center gap-1 px-2 py-1 rounded border border-neutral-200 dark:border-neutral-800 hover:bg-neutral-100 dark:hover:bg-neutral-900 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white transition-colors"
+              title="Export high-resolution dark-mode Tear Sheet PNG (⌘+Shift+S)"
+            >
+              <Camera className="w-3 h-3 text-indigo-500" />
+              <span>Tear Sheet</span>
+              <kbd className="hidden sm:inline text-[9px] px-1 py-0.2 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-500">⌘⇧S</kbd>
+            </button>
+          )}
+
           <div className="flex items-center rounded border border-neutral-200 dark:border-neutral-800 p-0.5">
             <button
               onClick={onPrevTicker}
@@ -259,14 +275,41 @@ export const CompanyHeader: React.FC<CompanyHeaderProps> = ({
           )}
         </div>
 
-        <button
-          onClick={() => onSelectTab('dcf')}
-          className="text-[11px] text-neutral-500 hover:text-neutral-950 dark:hover:text-white flex items-center gap-1 font-sans transition-colors"
-        >
-          <span>Model Expectations (Reverse DCF)</span>
-          <ArrowUpRight className="w-3 h-3" />
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowFootballField(!showFootballField)}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded border text-[11px] font-sans transition-all ${
+              showFootballField
+                ? 'bg-neutral-900 text-white dark:bg-white dark:text-neutral-950 border-neutral-900 dark:border-white font-medium shadow-xs'
+                : 'border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-900'
+            }`}
+            title="Toggle Football Field Valuation Ranges"
+          >
+            <BarChart2 className="w-3 h-3 text-emerald-500" />
+            <span>Football Field</span>
+            <span className="text-[10px] font-mono opacity-70">5 Ranges</span>
+          </button>
+
+          <button
+            onClick={() => onSelectTab('dcf')}
+            className="text-[11px] text-neutral-500 hover:text-neutral-950 dark:hover:text-white flex items-center gap-1 font-sans transition-colors"
+          >
+            <span>Model Expectations</span>
+            <ArrowUpRight className="w-3 h-3" />
+          </button>
+        </div>
       </div>
+
+      {/* Expandable Football Field Valuation Chart */}
+      {showFootballField && (
+        <div className="pt-2 animate-in fade-in duration-200">
+          <FootballFieldChart
+            summary={summary}
+            quote={quote}
+            onSelectTab={onSelectTab}
+          />
+        </div>
+      )}
     </div>
   )
 }

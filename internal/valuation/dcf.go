@@ -301,6 +301,16 @@ func dcfBalanceSheet(summary fundamentals.FinancialSummary, debtOverride *float6
 
 func selectedGrowth(config DCFConfig, historical float64, available bool, source string) (float64, string) {
 	if config.UseHistoricalGrowth {
+		// Institutional sanity bounds: uncapped multi-year historical CAGRs (e.g. >25% or <-10%)
+		// cause exponential runaway when compounded flat for 5-10 years.
+		// Bounding the default baseline between -10% and +25% ensures sustainable forward projections
+		// while the full uncapped HistoricalFCFCAGR / HistoricalRevenueCAGR remains accessible.
+		if historical > 0.25 {
+			return 0.25, fmt.Sprintf("%s (capped at 25.0%% for forward baseline)", source)
+		}
+		if historical < -0.10 {
+			return -0.10, fmt.Sprintf("%s (floored at -10.0%% for forward baseline)", source)
+		}
 		return historical, source
 	}
 	return config.GrowthRate, "manual assumption"

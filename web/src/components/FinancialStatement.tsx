@@ -17,9 +17,11 @@ import {
   Printer,
   Sparkles,
 } from 'lucide-react'
-import { SummaryResponse, SummaryMetric, SummaryValue, RawFactItem, AuditResponse } from '../types'
+import { SummaryResponse, SummaryMetric, SummaryValue, SummaryPeriod, RawFactItem, AuditResponse } from '../types'
 import { formatCurrency, formatPercent, formatShares } from '../lib/format'
 import { FinancialCharts } from './FinancialCharts'
+import { SheetsIntegrationModal } from './SheetsIntegrationModal'
+import { ProvenanceDrawer } from './ProvenanceDrawer'
 
 interface FinancialStatementProps {
   summary: SummaryResponse
@@ -79,6 +81,7 @@ const groups: MetricGroup[] = [
     metrics: [
       'Cash & Equivalents',
       'Current Assets',
+      'Accounts Receivable',
       'Current Liabilities',
       'Debt / Borrowings',
       'Stockholders\' Equity',
@@ -102,19 +105,40 @@ export const FinancialStatement: React.FC<FinancialStatementProps> = ({
   const [highlightSBC, setHighlightSBC] = useState(true)
   const [commonSize, setCommonSize] = useState(false)
   const [showCharts, setShowCharts] = useState(true)
+  const [sheetsModalOpen, setSheetsModalOpen] = useState(false)
   const [auditOpen, setAuditOpen] = useState(false)
   const [auditFacts, setAuditFacts] = useState<RawFactItem[]>([])
   const [loadingAudit, setLoadingAudit] = useState(false)
   const [selectedAuditMetric, setSelectedAuditMetric] = useState<string | null>(null)
   const [auditSearch, setAuditSearch] = useState('')
+  const [hoveredYear, setHoveredYear] = useState<number | null>(null)
+  const [provenanceCell, setProvenanceCell] = useState<{
+    metricName: string
+    period: SummaryPeriod
+    value: SummaryValue
+  } | null>(null)
 
   const metricMap = new Map<string, SummaryMetric>()
   summary.metrics.forEach((m) => metricMap.set(m.Name, m))
 
   const periods = summary.periods || []
+  const annualInflections = summary.inflections?.some((item) => item.period_label?.startsWith('FY ')) || false
 
   // Load audit XBRL facts
   const openAuditDrawer = (metricName?: string) => {
+    if (metricName && metricMap.has(metricName)) {
+      const m = metricMap.get(metricName)!
+      for (let i = 0; i < m.Values.length; i++) {
+        if (m.Values[i]?.Present && i < periods.length) {
+          setProvenanceCell({
+            metricName,
+            period: periods[i],
+            value: m.Values[i],
+          })
+          return
+        }
+      }
+    }
     setSelectedAuditMetric(metricName || null)
     setAuditOpen(true)
     if (auditFacts.length === 0 && !loadingAudit) {
@@ -336,34 +360,97 @@ export const FinancialStatement: React.FC<FinancialStatementProps> = ({
     const valid = values.filter((v) => v && v.Present)
     if (valid.length < 2) return <span className="text-neutral-300 dark:text-neutral-700">—</span>
 
-    const chrono = [...values].reverse().filter((v) => v && v.Present).map((v) => v.Value)
+    const chronoValues = [...values].reverse().filter((v) => v && v.Present)
+    const chrono = chronoValues.map((v) => v.Value)
     const min = Math.min(...chrono)
     const max = Math.max(...chrono)
     const range = max - min || 1
 
-    const width = 36
-    const height = 12
+    const width = 44
+    const height = 15
+    const padX = 3
+    const padY = 2
+
     const points = chrono
       .map((v, i) => {
-        const x = (i / (chrono.length - 1)) * (width - 4) + 2
-        const y = height - 2 - ((v - min) / range) * (height - 4)
+        const x = (i / (chrono.length - 1)) * (width - padX * 2) + padX
+        const y = height - padY - ((v - min) / range) * (height - padY * 2)
         return `${x.toFixed(1)},${y.toFixed(1)}`
       })
       .join(' ')
 
     const isUp = chrono[chrono.length - 1] >= chrono[0]
+    const strokeColor = isUp ? '#10b981' : '#f43f5e'
+
+    // Chronological periods matching sparkline
+    const chronoPeriods = [...periods].reverse()
+    const activeChronoIdx =
+      hoveredYear !== null ? chronoPeriods.findIndex((p) => Number(p.Year) === hoveredYear) : -1
+    const hasActive = activeChronoIdx >= 0 && activeChronoIdx < chrono.length
+    const activeX = hasActive
+      ? (activeChronoIdx / (chrono.length - 1)) * (width - padX * 2) + padX
+      : 0
+    const activeY = hasActive
+      ? height - padY - ((chrono[activeChronoIdx] - min) / range) * (height - padY * 2)
+      : 0
+
+    const handleSparklineMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+      const rect = e.currentTarget.getBoundingClientRect()
+      const mouseX = Math.max(0, Math.min(rect.width, e.clientX - rect.left))
+      const ratio = mouseX / rect.width
+      const nearestIdx = Math.round(ratio * (chronoPeriods.length - 1))
+      const yr = Number(chronoPeriods[nearestIdx]?.Year)
+      if (yr && yr !== hoveredYear) {
+        setHoveredYear(yr)
+      }
+    }
 
     return (
-      <svg width={width} height={height} className="inline-block overflow-visible opacity-75">
-        <polyline
-          fill="none"
-          stroke={isUp ? '#10b981' : '#f43f5e'}
-          strokeWidth="1.2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          points={points}
-        />
-      </svg>
+      <div className="relative inline-flex items-center justify-center">
+        <svg
+          width={width}
+          height={height}
+          onMouseMove={handleSparklineMouseMove}
+          onMouseEnter={handleSparklineMouseMove}
+          onMouseLeave={() => setHoveredYear(null)}
+          className="inline-block overflow-visible cursor-crosshair select-none"
+        >
+          {/* Sparkline curve */}
+          <polyline
+            fill="none"
+            stroke={strokeColor}
+            strokeWidth="1.3"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            points={points}
+            className="opacity-80 hover:opacity-100 transition-opacity"
+          />
+
+          {/* Crosshair Scrub Guide & Synchronized Active Dot */}
+          {hasActive && (
+            <g>
+              <line
+                x1={activeX}
+                y1={0}
+                x2={activeX}
+                y2={height}
+                stroke="#6366f1"
+                strokeWidth="1"
+                strokeDasharray="1,1"
+              />
+              <circle
+                cx={activeX}
+                cy={activeY}
+                r={2.8}
+                fill="#ffffff"
+                stroke="#6366f1"
+                strokeWidth="1.5"
+              />
+              <circle cx={activeX} cy={activeY} r={1.2} fill="#6366f1" />
+            </g>
+          )}
+        </svg>
+      </div>
     )
   }
 
@@ -616,12 +703,48 @@ export const FinancialStatement: React.FC<FinancialStatementProps> = ({
 
       {/* Control Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3 text-xs font-mono py-1">
-        <div className="flex items-center gap-2 text-neutral-500">
-          <span>{summary.intangibles.Currency || 'USD'}</span>
-          <span>•</span>
-          <span>{periods.length} Fiscal Periods</span>
-          <span>•</span>
-          <span>SEC Form 10-K / 20-F</span>
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Statement Cadence Switcher: Annual vs. Quarterly vs. TTM */}
+          {onSelectCadence && (
+            <div className="inline-flex border border-neutral-300 dark:border-neutral-700 divide-x divide-neutral-300 dark:divide-neutral-700 font-mono text-[11px] rounded overflow-hidden">
+              <button
+                onClick={() => onSelectCadence('annual')}
+                className={`px-2.5 py-1 transition-colors ${
+                  cadence === 'annual'
+                    ? 'bg-neutral-900 text-white dark:bg-white dark:text-black font-semibold'
+                    : 'bg-white dark:bg-neutral-950 text-neutral-600 dark:text-neutral-400 hover:text-neutral-950 dark:hover:text-white'
+                }`}
+              >
+                Annual (10-K)
+              </button>
+              <button
+                onClick={() => onSelectCadence('quarterly')}
+                className={`px-2.5 py-1 transition-colors ${
+                  cadence === 'quarterly'
+                    ? 'bg-neutral-900 text-white dark:bg-white dark:text-black font-semibold'
+                    : 'bg-white dark:bg-neutral-950 text-neutral-600 dark:text-neutral-400 hover:text-neutral-950 dark:hover:text-white'
+                }`}
+              >
+                Quarterly (10-Q)
+              </button>
+              <button
+                onClick={() => onSelectCadence('ttm')}
+                className={`px-2.5 py-1 transition-colors ${
+                  cadence === 'ttm'
+                    ? 'bg-neutral-900 text-white dark:bg-white dark:text-black font-semibold'
+                    : 'bg-white dark:bg-neutral-950 text-neutral-600 dark:text-neutral-400 hover:text-neutral-950 dark:hover:text-white'
+                }`}
+              >
+                TTM (12M)
+              </button>
+            </div>
+          )}
+
+          <div className="hidden sm:flex items-center gap-2 text-neutral-500">
+            <span>{summary.intangibles.Currency || 'USD'}</span>
+            <span>•</span>
+            <span>{periods.length} Periods</span>
+          </div>
         </div>
 
         <div className="flex items-center gap-1.5">
@@ -696,11 +819,129 @@ export const FinancialStatement: React.FC<FinancialStatementProps> = ({
             <FileSpreadsheet className="w-3 h-3" />
             <span>JSON</span>
           </button>
+
+          <button
+            onClick={() => window.print()}
+            className="flex items-center gap-1 px-2.5 py-1 rounded border border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white text-xs transition-colors"
+            title="Print or Save PDF Tear-Sheet"
+          >
+            <Printer className="w-3 h-3" />
+            <span>Print Tear-Sheet</span>
+          </button>
+
+          <button
+            onClick={() => setSheetsModalOpen(true)}
+            className="flex items-center gap-1 px-2.5 py-1 rounded border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 text-xs font-semibold transition-colors"
+            title="Excel & Google Sheets Add-in formulas"
+          >
+            <FileSpreadsheet className="w-3 h-3 text-emerald-500" />
+            <span>=SEC(...) Formula</span>
+          </button>
         </div>
       </div>
 
+      {/* Quarterly or annual inflections, depending on SEC fact coverage */}
+      {summary.inflections && summary.inflections.length > 0 && (
+        <div className="border border-neutral-200/80 dark:border-white/10 rounded-xl p-4 bg-white/70 dark:bg-[#030611]/60 backdrop-blur-md">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-emerald-500" />
+                <h3 className="text-xs font-semibold text-neutral-900 dark:text-white font-sans uppercase tracking-wider">
+                  {annualInflections ? 'Annual Inflections & Growth Tracking' : 'Quarterly Inflections & Earnings Surprise Tracking (10-Q)'}
+                </h3>
+                <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full border font-medium ${
+                  annualInflections
+                    ? 'bg-amber-500/10 text-amber-600 border-amber-500/20'
+                    : 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
+                }`}>
+                  {annualInflections ? 'Annual Filing Fallback' : 'Trailing Twelve Months'}
+                </span>
+              </div>
+              <p className="text-[11px] text-neutral-500 font-sans mt-0.5">
+                {annualInflections
+                  ? 'Annual growth inflection rates across core income and cash-flow drivers; quarterly filings are unavailable.'
+                  : 'Sequential (QoQ) and annual (YoY) growth inflection rates across core income and cash-flow drivers.'}
+              </p>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs font-mono">
+              <thead>
+                <tr className="border-b border-neutral-200/80 dark:border-white/10 text-neutral-400 font-sans text-[11px]">
+                  <th className="py-1.5 px-3 font-normal">Metric Line Item</th>
+                  <th className="py-1.5 px-3 font-normal text-right">{annualInflections ? 'Latest FY' : 'Latest (Q0)'}</th>
+                  {!annualInflections && <th className="py-1.5 px-3 font-normal text-right">Prior Q (Q1)</th>}
+                  <th className="py-1.5 px-3 font-normal text-right">{annualInflections ? 'Prior FY' : 'Prior Yr Q (Q4)'}</th>
+                  {!annualInflections && <th className="py-1.5 px-3 font-normal text-right">QoQ Sequential</th>}
+                  <th className="py-1.5 px-3 font-normal text-right">YoY Growth</th>
+                  <th className="py-1.5 px-3 font-normal text-right">Prior YoY</th>
+                  <th className="py-1.5 px-3 font-normal text-right">Inflection Signal</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-neutral-100 dark:divide-white/[0.04]">
+                {summary.inflections.map((inf) => {
+                  const yoyColor = inf.yoy_growth > 0 ? 'text-emerald-500' : 'text-rose-500'
+                  const qoqColor = inf.qoq_growth > 0 ? 'text-emerald-500' : 'text-rose-500'
+                  return (
+                    <tr key={inf.metric} className="hover:bg-neutral-50 dark:hover:bg-white/[0.02] transition-colors">
+                      <td className="py-2 px-3 font-medium text-neutral-900 dark:text-neutral-100">
+                        {inf.metric}
+                      </td>
+                      <td className="py-2 px-3 text-right text-neutral-700 dark:text-neutral-300">
+                        {formatCurrency(inf.latest_value, true, summary.intangibles?.Currency || 'USD')}
+                      </td>
+                      {!annualInflections && (
+                        <td className="py-2 px-3 text-right text-neutral-500">
+                          {formatCurrency(inf.prior_quarter_value, true, summary.intangibles?.Currency || 'USD')}
+                        </td>
+                      )}
+                      <td className="py-2 px-3 text-right text-neutral-500">
+                        {formatCurrency(inf.prior_year_quarter_value, true, summary.intangibles?.Currency || 'USD')}
+                      </td>
+                      {!annualInflections && (
+                        <td className={`py-2 px-3 text-right font-semibold ${qoqColor}`}>
+                          {inf.qoq_growth > 0 ? '+' : ''}{(inf.qoq_growth * 100).toFixed(1)}%
+                        </td>
+                      )}
+                      <td className={`py-2 px-3 text-right font-semibold ${yoyColor}`}>
+                        {inf.yoy_growth > 0 ? '+' : ''}{(inf.yoy_growth * 100).toFixed(1)}%
+                      </td>
+                      <td className="py-2 px-3 text-right text-neutral-400">
+                        {inf.prior_yoy_growth > 0 ? '+' : ''}{(inf.prior_yoy_growth * 100).toFixed(1)}%
+                      </td>
+                      <td className="py-2 px-3 text-right">
+                        {inf.is_accelerating ? (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+                            ACCELERATING ▲
+                          </span>
+                        ) : inf.yoy_growth < inf.prior_yoy_growth - 0.05 ? (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-amber-500/10 text-amber-500 border border-amber-500/20">
+                            decelerating ▼
+                          </span>
+                        ) : (
+                          <span className="text-neutral-400 text-[10px]">steady</span>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Visual Analytics Charts Section */}
-      {showCharts && <FinancialCharts summary={summary} compact={compact} />}
+      {showCharts && (
+        <FinancialCharts
+          summary={summary}
+          compact={compact}
+          hoveredYear={hoveredYear}
+          onHoverYear={setHoveredYear}
+        />
+      )}
 
       {/* Single Continuous Financial Statement Grid */}
       <div className="border border-neutral-200/80 dark:border-white/10 overflow-hidden bg-white/70 dark:bg-[#030611]/60 backdrop-blur-md rounded-xl">
@@ -709,14 +950,40 @@ export const FinancialStatement: React.FC<FinancialStatementProps> = ({
             <thead>
               <tr className="border-b border-neutral-200/80 dark:border-white/10 text-neutral-400 bg-neutral-50/60 dark:bg-white/[0.04] font-sans">
                 <th className="py-2.5 px-4 font-normal text-neutral-500 w-1/4">Metric Line Item</th>
-                {periods.map((p) => (
-                  <th key={p.Year} className="py-2.5 px-3 font-normal text-right tabular-nums">
-                    <div>FY {p.Year}</div>
-                    <div className="text-[10px] text-neutral-400 dark:text-neutral-600 font-mono">
-                      {p.End}
-                    </div>
-                  </th>
-                ))}
+                {periods.map((p) => {
+                  const headerTitle = p.Label || (p.Quarter ? `${p.Quarter} ${p.Year}` : `FY ${p.Year}`)
+                  const isHovered = Number(p.Year) === hoveredYear
+                  return (
+                    <th
+                      key={p.End}
+                      onMouseEnter={() => setHoveredYear(Number(p.Year))}
+                      onMouseLeave={() => setHoveredYear(null)}
+                      className={`py-2.5 px-3 font-normal text-right tabular-nums transition-colors cursor-pointer ${
+                        isHovered
+                          ? 'bg-indigo-500/10 dark:bg-indigo-500/20 text-indigo-900 dark:text-indigo-200 font-semibold'
+                          : ''
+                      }`}
+                    >
+                      <div className="flex items-center justify-end gap-1">
+                        <span>{headerTitle}</span>
+                        {p.Form && (
+                          <span
+                            className={`text-[9px] px-1 py-0.2 rounded font-mono ${
+                              p.Form === '10-K'
+                                ? 'bg-neutral-200 dark:bg-neutral-800 text-neutral-800 dark:text-neutral-200 font-semibold'
+                                : 'bg-neutral-100 dark:bg-neutral-900 text-neutral-500'
+                            }`}
+                          >
+                            {p.Form}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-neutral-400 dark:text-neutral-600 font-mono">
+                        {p.End}
+                      </div>
+                    </th>
+                  )
+                })}
                 <th className="py-2.5 px-3 font-normal text-right tabular-nums text-neutral-400 font-sans w-16">
                   YoY Δ
                 </th>
@@ -802,18 +1069,47 @@ export const FinancialStatement: React.FC<FinancialStatementProps> = ({
                               </span>
                             )}
                           </td>
-                          {periods.map((_, idx) => {
+                          {periods.map((p, idx) => {
                             const val = metric.Values[idx]
+                            const isHovered = Number(p.Year) === hoveredYear
+                            const isClickable = val && val.Present
                             return (
                               <td
                                 key={idx}
-                                className={`py-2 px-3 text-right tabular-nums ${
-                                  isKeyMetric
+                                onMouseEnter={() => setHoveredYear(Number(p.Year))}
+                                onMouseLeave={() => setHoveredYear(null)}
+                                onClick={() => {
+                                  if (isClickable) {
+                                    setProvenanceCell({
+                                      metricName: name,
+                                      period: p,
+                                      value: val,
+                                    })
+                                  }
+                                }}
+                                className={`py-2 px-3 text-right tabular-nums transition-colors relative group/cell ${
+                                  isClickable ? 'cursor-pointer hover:bg-amber-500/15 dark:hover:bg-amber-500/20' : ''
+                                } ${
+                                  isHovered
+                                    ? 'bg-indigo-500/10 dark:bg-indigo-500/15 font-semibold text-neutral-950 dark:text-white'
+                                    : isKeyMetric
                                     ? 'font-medium text-neutral-950 dark:text-white'
                                     : 'text-neutral-600 dark:text-neutral-400'
                                 }`}
+                                title={
+                                  isClickable
+                                    ? `Click to verify SEC filing provenance & copy formula for ${name} (${p.Label || p.Year || p.End})`
+                                    : undefined
+                                }
                               >
-                                {formatValue(name, val, idx)}
+                                <div className="flex items-center justify-end gap-1">
+                                  <span>{formatValue(name, val, idx)}</span>
+                                  {isClickable && (
+                                    <span className="opacity-0 group-hover/cell:opacity-100 text-[9px] text-amber-600 dark:text-amber-400 font-mono transition-opacity">
+                                      ↗
+                                    </span>
+                                  )}
+                                </div>
                               </td>
                             )
                           })}
@@ -1000,6 +1296,26 @@ export const FinancialStatement: React.FC<FinancialStatementProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Excel & Google Sheets Integration Modal */}
+      <SheetsIntegrationModal
+        isOpen={sheetsModalOpen}
+        onClose={() => setSheetsModalOpen(false)}
+        currentTicker={summary.ticker}
+      />
+
+      {/* Click-to-Verify SEC Filing Provenance Drawer */}
+      {provenanceCell && (
+        <ProvenanceDrawer
+          isOpen={!!provenanceCell}
+          onClose={() => setProvenanceCell(null)}
+          ticker={summary.ticker}
+          metricName={provenanceCell.metricName}
+          period={provenanceCell.period}
+          value={provenanceCell.value}
+          allMetrics={summary.metrics}
+        />
       )}
     </div>
   )

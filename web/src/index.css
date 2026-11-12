@@ -291,3 +291,66 @@
   }
 }
 
+/* ========================================================= */
+/* Institutional Tear-Sheet Print Media Styles              */
+/* ========================================================= */
+@media print {
+  @page {
+    margin: 1.2cm 1cm;
+    size: landscape;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-size: 10pt;
+  }
+
+  /* Hide interactive / decor elements */
+  nav,
+  header,
+  footer,
+  .rainbow-orb,
+  [data-print-hide],
+  button,
+  input,
+  select,
+  [cmdk-root],
+  .no-print {
+    display: none !important;
+  }
+
+  /* Force table formatting and prevent page splitting mid-row */
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    page-break-inside: auto;
+  }
+
+  tr {
+    page-break-inside: avoid;
+    page-break-after: auto;
+  }
+
+  thead {
+    display: table-header-group;
+  }
+
+  th, td {
+    color: #000000 !important;
+    border-color: #d1d5db !important;
+  }
+
+  /* Ensure background colors on badges/bars print cleanly */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Avoid cutting cards or charts across page breaks */
+  .rounded-xl, .border {
+    border-color: #e5e7eb !important;
+    page-break-inside: avoid;
+  }
+}
+

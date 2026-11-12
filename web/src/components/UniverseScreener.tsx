@@ -8,9 +8,17 @@ import {
   CheckCircle,
   HelpCircle,
   Layers,
+  Download,
+  Sliders,
+  Globe,
+  Database,
+  Sparkles,
+  Copy,
+  Check,
 } from 'lucide-react'
-import { Company, RankedCompany, RankResult, ModernGAAPCandidate } from '../types'
+import { Company, RankedCompany, RankResult, ModernGAAPCandidate, UniverseItem } from '../types'
 import { formatPercent, formatCurrency } from '../lib/format'
+import { prefetchOnHover, prefetchSummary } from '../lib/cache'
 
 interface UniverseScreenerProps {
   companies: Company[]
@@ -33,11 +41,16 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
   currentTicker,
   onSelectTicker,
 }) => {
-  const [viewMode, setViewMode] = useState<'ranked' | 'scatter' | 'gaap-arbitrage' | 'directory'>('ranked')
+  const [viewMode, setViewMode] = useState<'ranked' | 'scatter' | 'gaap-arbitrage' | 'directory' | 'universes'>('ranked')
   const [rankedData, setRankedData] = useState<RankResult | null>(null)
   const [loadingRank, setLoadingRank] = useState<boolean>(false)
   const [rankError, setRankError] = useState<string | null>(null)
   const [hoveredScatterTicker, setHoveredScatterTicker] = useState<string | null>(null)
+
+  // Universes State
+  const [universes, setUniverses] = useState<UniverseItem[]>([])
+  const [loadingUniverses, setLoadingUniverses] = useState<boolean>(false)
+  const [copiedSyncCmd, setCopiedSyncCmd] = useState<string | null>(null)
 
   // Modern GAAP Arbitrage State
   const [gaapCandidates, setGaapCandidates] = useState<ModernGAAPCandidate[]>([])
@@ -51,6 +64,52 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
   const [preset, setPreset] = useState<FilterPreset>('all')
   const [sortField, setSortField] = useState<SortField>('score')
   const [sortAsc, setSortAsc] = useState<boolean>(false)
+
+  // Quantitative Range Sliders
+  const [minScore, setMinScore] = useState<number>(0)
+  const [minROIC, setMinROIC] = useState<number>(-5)
+  const [minRevCAGR, setMinRevCAGR] = useState<number>(-10)
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState<boolean>(false)
+
+  const exportScreenerCSV = () => {
+    const headers = [
+      'Rank',
+      'Score',
+      'Ticker',
+      'Company',
+      'Sector',
+      'ROIC %',
+      'FCF Margin %',
+      'Rev 5Y CAGR %',
+      'Buyback Yield %',
+      'Revenue ($)',
+    ]
+    const rows = [headers]
+    filteredRanked.forEach((c, idx) => {
+      rows.push([
+        (idx + 1).toString(),
+        c.score.toFixed(1),
+        c.ticker,
+        `"${c.company.replace(/"/g, '""')}"`,
+        `"${c.sector}"`,
+        c.has_roic ? (c.roic * 100).toFixed(2) : '',
+        (c.fcf_margin * 100).toFixed(2),
+        (c.revenue_cagr * 100).toFixed(2),
+        c.has_share_trend ? (c.share_reduction * 100).toFixed(2) : '',
+        c.revenue.toString(),
+      ])
+    })
+    const csvContent =
+      'data:text/csv;charset=utf-8,' +
+      rows.map((r) => r.join(',')).join('\n')
+    const encoded = encodeURI(csvContent)
+    const link = document.createElement('a')
+    link.href = encoded
+    link.download = `sec_screener_${preset}_${new Date().toISOString().split('T')[0]}.csv`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
 
   // Fetch ranking data
   useEffect(() => {
@@ -105,6 +164,26 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
     }
   }, [viewMode, gaapCandidates.length, loadingGAAP])
 
+  // Fetch Universes data
+  useEffect(() => {
+    if (viewMode === 'universes' && universes.length === 0 && !loadingUniverses) {
+      let ignore = false
+      setLoadingUniverses(true)
+      fetch('/api/universes')
+        .then((res) => (res.ok ? res.json() : []))
+        .then((data: UniverseItem[]) => {
+          if (!ignore) setUniverses(data)
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (!ignore) setLoadingUniverses(false)
+        })
+      return () => {
+        ignore = true
+      }
+    }
+  }, [viewMode, universes.length, loadingUniverses])
+
   // Sectors list
   const sectorOptions = useMemo(() => {
     if (!rankedData) return []
@@ -154,6 +233,17 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
       return true
     })
 
+    // Advanced quantitative range filters
+    if (minScore > 0) {
+      list = list.filter((c) => c.score >= minScore)
+    }
+    if (minROIC > -5) {
+      list = list.filter((c) => c.has_roic && c.roic * 100 >= minROIC)
+    }
+    if (minRevCAGR > -10) {
+      list = list.filter((c) => c.revenue_cagr * 100 >= minRevCAGR)
+    }
+
     // Sort
     list.sort((a, b) => {
       let va = 0
@@ -188,7 +278,7 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
     })
 
     return list
-  }, [rankedData, selectedSector, preset, search, sortField, sortAsc])
+  }, [rankedData, selectedSector, preset, search, sortField, sortAsc, minScore, minROIC, minRevCAGR])
 
   // Directory filter
   const filteredDirectory = useMemo(() => {
@@ -271,15 +361,15 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
             SEC EDGAR Fundamentals & Quality Universe
           </h2>
           <p className="text-[11px] text-neutral-500 dark:text-neutral-400 font-sans mt-0.5">
-            528 companies • Standardized multi-factor ranking and knowledge asset capitalization.
+            {companies.length} companies synced • Standardized multi-factor ranking and knowledge asset capitalization.
           </p>
         </div>
 
         {/* View Mode Segment Toggle */}
-        <div className="flex items-center gap-1 font-mono text-xs">
+        <div className="flex items-center gap-1 font-mono text-xs overflow-x-auto pb-1 sm:pb-0 scrollbar-none">
           <button
             onClick={() => setViewMode('ranked')}
-            className={`px-3 py-1.5 rounded transition-colors ${
+            className={`px-3 py-1.5 rounded transition-colors whitespace-nowrap ${
               viewMode === 'ranked'
                 ? 'bg-neutral-900 text-white dark:bg-white dark:text-black font-medium'
                 : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white border border-transparent hover:border-neutral-200 dark:hover:border-neutral-800'
@@ -290,7 +380,7 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
 
           <button
             onClick={() => setViewMode('scatter')}
-            className={`px-3 py-1.5 rounded transition-colors ${
+            className={`px-3 py-1.5 rounded transition-colors whitespace-nowrap ${
               viewMode === 'scatter'
                 ? 'bg-neutral-900 text-white dark:bg-white dark:text-black font-medium'
                 : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white border border-transparent hover:border-neutral-200 dark:border-neutral-800'
@@ -301,7 +391,7 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
 
           <button
             onClick={() => setViewMode('gaap-arbitrage')}
-            className={`px-3 py-1.5 rounded transition-colors ${
+            className={`px-3 py-1.5 rounded transition-colors whitespace-nowrap ${
               viewMode === 'gaap-arbitrage'
                 ? 'bg-neutral-900 text-white dark:bg-white dark:text-black font-medium'
                 : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white border border-transparent hover:border-neutral-200 dark:hover:border-neutral-800'
@@ -312,7 +402,7 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
 
           <button
             onClick={() => setViewMode('directory')}
-            className={`px-3 py-1.5 rounded transition-colors ${
+            className={`px-3 py-1.5 rounded transition-colors whitespace-nowrap ${
               viewMode === 'directory'
                 ? 'bg-neutral-900 text-white dark:bg-white dark:text-black font-medium'
                 : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white border border-transparent hover:border-neutral-200 dark:border-neutral-800'
@@ -320,14 +410,25 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
           >
             SEC Directory
           </button>
+
+          <button
+            onClick={() => setViewMode('universes')}
+            className={`px-3 py-1.5 rounded transition-colors whitespace-nowrap ${
+              viewMode === 'universes'
+                ? 'bg-neutral-900 text-white dark:bg-white dark:text-black font-medium'
+                : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white border border-transparent hover:border-neutral-200 dark:hover:border-neutral-800'
+            }`}
+          >
+            Universes (3,000+)
+          </button>
         </div>
       </div>
 
       {/* Filter Toolbar */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs font-mono py-1">
-        {/* Preset Filter Pills (Ranked Mode Only) */}
+        {/* Preset Filter Pills & Controls (Ranked Mode Only) */}
         {viewMode === 'ranked' && (
-          <div className="flex items-center gap-1 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
             {[
               { id: 'all', label: 'All Ranked' },
               { id: 'quality', label: 'Score ≥ 75' },
@@ -347,6 +448,33 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
                 {p.label}
               </button>
             ))}
+
+            <div className="h-4 w-px bg-neutral-200 dark:bg-neutral-800 mx-1 hidden sm:block" />
+
+            <button
+              onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+              className={`flex items-center gap-1 px-2 py-1 rounded transition-colors border ${
+                showAdvancedFilters || minScore > 0 || minROIC > -5 || minRevCAGR > -10
+                  ? 'border-neutral-900 dark:border-white bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-white font-medium'
+                  : 'border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
+              }`}
+              title="Toggle Quantitative Range Filters"
+            >
+              <Sliders className="w-3 h-3" />
+              <span>Filters</span>
+              {(minScore > 0 || minROIC > -5 || minRevCAGR > -10) && (
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+              )}
+            </button>
+
+            <button
+              onClick={exportScreenerCSV}
+              className="flex items-center gap-1 px-2 py-1 rounded transition-colors border border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white hover:border-neutral-300 dark:hover:border-neutral-700"
+              title="Export Current Screener View to CSV"
+            >
+              <Download className="w-3 h-3" />
+              <span>CSV</span>
+            </button>
           </div>
         )}
 
@@ -387,6 +515,95 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Advanced Quantitative Filters Drawer */}
+      {viewMode === 'ranked' && showAdvancedFilters && (
+        <div className="p-3.5 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50/80 dark:bg-neutral-900/50 backdrop-blur-sm grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs font-mono animate-in fade-in duration-150">
+          <div>
+            <div className="flex justify-between items-center text-neutral-600 dark:text-neutral-400 mb-1">
+              <span>Min Quality Score</span>
+              <span className="font-semibold text-neutral-900 dark:text-white">
+                {minScore > 0 ? minScore : 'Off'}
+              </span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="90"
+              step="5"
+              value={minScore}
+              onChange={(e) => setMinScore(Number(e.target.value))}
+              className="w-full accent-neutral-900 dark:accent-white cursor-pointer"
+            />
+            <div className="flex justify-between text-[10px] text-neutral-400">
+              <span>0</span>
+              <span>50</span>
+              <span>90</span>
+            </div>
+          </div>
+
+          <div>
+            <div className="flex justify-between items-center text-neutral-600 dark:text-neutral-400 mb-1">
+              <span>Min ROIC (%)</span>
+              <span className="font-semibold text-neutral-900 dark:text-white">
+                {minROIC > -5 ? `${minROIC}%` : 'Off'}
+              </span>
+            </div>
+            <input
+              type="range"
+              min="-5"
+              max="40"
+              step="5"
+              value={minROIC}
+              onChange={(e) => setMinROIC(Number(e.target.value))}
+              className="w-full accent-neutral-900 dark:accent-white cursor-pointer"
+            />
+            <div className="flex justify-between text-[10px] text-neutral-400">
+              <span>Any</span>
+              <span>15%</span>
+              <span>40%</span>
+            </div>
+          </div>
+
+          <div>
+            <div className="flex justify-between items-center text-neutral-600 dark:text-neutral-400 mb-1">
+              <span>Min 5Y Rev CAGR (%)</span>
+              <span className="font-semibold text-neutral-900 dark:text-white">
+                {minRevCAGR > -10 ? `${minRevCAGR}%` : 'Off'}
+              </span>
+            </div>
+            <input
+              type="range"
+              min="-10"
+              max="30"
+              step="5"
+              value={minRevCAGR}
+              onChange={(e) => setMinRevCAGR(Number(e.target.value))}
+              className="w-full accent-neutral-900 dark:accent-white cursor-pointer"
+            />
+            <div className="flex justify-between text-[10px] text-neutral-400">
+              <span>Any</span>
+              <span>10%</span>
+              <span>30%</span>
+            </div>
+          </div>
+
+          {(minScore > 0 || minROIC > -5 || minRevCAGR > -10) && (
+            <div className="sm:col-span-3 flex justify-end pt-1">
+              <button
+                onClick={() => {
+                  setMinScore(0)
+                  setMinROIC(-5)
+                  setMinRevCAGR(-10)
+                }}
+                className="text-[11px] text-neutral-500 hover:text-rose-500 transition-colors underline underline-offset-2"
+              >
+                Reset Range Filters
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ========================================================= */}
       {/* RANKED VIEW TABLE */}
@@ -469,7 +686,7 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
                 {loadingRank && filteredRanked.length === 0 && (
                   <tr>
                     <td colSpan={9} className="py-12 text-center text-neutral-500 font-mono">
-                      Computing 5-year multi-factor ranks across 528 companies...
+                      Computing 5-year multi-factor ranks across {companies.length || 'all'} companies...
                     </td>
                   </tr>
                 )}
@@ -480,6 +697,7 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
                     <tr
                       key={c.ticker}
                       onClick={() => onSelectTicker(c.ticker)}
+                      {...prefetchOnHover(c.ticker)}
                       className={`hover:bg-neutral-100/80 dark:hover:bg-neutral-900/60 cursor-pointer transition-colors ${
                         isCurrent
                           ? 'bg-neutral-100/90 dark:bg-neutral-900/80 font-medium'
@@ -722,7 +940,10 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
                     <g
                       key={c.ticker}
                       className="cursor-pointer"
-                      onMouseEnter={() => setHoveredScatterTicker(c.ticker)}
+                      onMouseEnter={() => {
+                        setHoveredScatterTicker(c.ticker)
+                        prefetchSummary(c.ticker)
+                      }}
                       onMouseLeave={() => setHoveredScatterTicker(null)}
                       onClick={() => onSelectTicker(c.ticker)}
                     >
@@ -881,6 +1102,7 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
                         <tr
                           key={c.ticker}
                           onClick={() => onSelectTicker(c.ticker)}
+                          {...prefetchOnHover(c.ticker)}
                           className={`cursor-pointer transition-colors ${
                             isCurrent
                               ? 'bg-neutral-100 dark:bg-neutral-900 font-medium'
@@ -972,6 +1194,7 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
                     <tr
                       key={c.ticker}
                       onClick={() => onSelectTicker(c.ticker)}
+                      {...prefetchOnHover(c.ticker)}
                       className={`hover:bg-neutral-100/80 dark:hover:bg-neutral-900/60 cursor-pointer transition-colors ${
                         isCurrent
                           ? 'bg-neutral-100/90 dark:bg-neutral-900/80 font-medium'
@@ -1007,6 +1230,133 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
                 })}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* UNIVERSES VIEW (3,000+ EQUITIES COVERAGE) */}
+      {/* ========================================================= */}
+      {viewMode === 'universes' && (
+        <div className="space-y-6">
+          {/* Header Banner */}
+          <div className="p-5 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-900/30">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <Database className="w-4 h-4 text-neutral-900 dark:text-white" />
+                  <h3 className="text-sm font-semibold text-neutral-900 dark:text-white">
+                    Expanded Coverage: Russell 2000, MidCaps & Foreign ADRs
+                  </h3>
+                </div>
+                <p className="text-xs text-neutral-600 dark:text-neutral-400 font-sans leading-relaxed max-w-3xl">
+                  Fundamental stock pickers generate the highest alpha in small-caps, undercovered mid-caps, and international compounders.
+                  The database supports plug-and-play universe ingestion with automatic rate-limiting compliance (8.5 req/sec SEC EDGAR threshold).
+                </p>
+              </div>
+              <div className="text-xs font-mono px-3 py-2 rounded-lg bg-white dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400 whitespace-nowrap self-start md:self-auto">
+                <span className="font-semibold text-neutral-900 dark:text-white">{companies.length}</span> Active Synced Filers
+              </div>
+            </div>
+          </div>
+
+          {loadingUniverses ? (
+            <div className="p-12 text-center text-xs font-mono text-neutral-500">
+              Loading universe catalog...
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {universes.map((u) => {
+                const pct = u.total > 0 ? Math.min(100, Math.round((u.synced / u.total) * 100)) : 0
+                const syncCmd = `./sec sync --universe ${u.name} --skip-existing`
+                const isCopied = copiedSyncCmd === u.name
+
+                return (
+                  <div
+                    key={u.name}
+                    className="p-5 rounded-xl border border-neutral-200 dark:border-neutral-800/80 bg-neutral-50/50 dark:bg-neutral-950/40 hover:border-neutral-300 dark:hover:border-neutral-700 transition-all flex flex-col justify-between"
+                  >
+                    <div>
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <h4 className="text-sm font-medium text-neutral-900 dark:text-white capitalize">
+                          {u.name.replace(/_/g, ' ')}
+                        </h4>
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-neutral-200/60 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300">
+                          {u.filename}
+                        </span>
+                      </div>
+
+                      <p className="text-xs text-neutral-500 dark:text-neutral-400 font-sans mb-4 min-h-[36px]">
+                        {u.description}
+                      </p>
+
+                      {/* Coverage Progress */}
+                      <div className="space-y-1.5 mb-4">
+                        <div className="flex justify-between text-xs font-mono">
+                          <span className="text-neutral-500">Coverage</span>
+                          <span className="text-neutral-900 dark:text-white font-medium">
+                            {u.synced} / {u.total} ({pct}%)
+                          </span>
+                        </div>
+                        <div className="w-full h-1.5 bg-neutral-200 dark:bg-neutral-800 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full transition-all duration-500 ${
+                              pct === 100
+                                ? 'bg-emerald-500'
+                                : pct > 0
+                                ? 'bg-neutral-900 dark:bg-white'
+                                : 'bg-transparent'
+                            }`}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Sync Action */}
+                    <div className="pt-3 border-t border-neutral-200/80 dark:border-neutral-800/80">
+                      <div className="flex items-center justify-between text-[11px] font-mono mb-1.5">
+                        <span className="text-neutral-400">Sync Command</span>
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(syncCmd)
+                            setCopiedSyncCmd(u.name)
+                            setTimeout(() => setCopiedSyncCmd(null), 2000)
+                          }}
+                          className="text-neutral-500 hover:text-neutral-900 dark:hover:text-white flex items-center gap-1 transition-colors"
+                        >
+                          {isCopied ? (
+                            <>
+                              <Check className="w-3 h-3 text-emerald-500" />
+                              <span className="text-emerald-600 dark:text-emerald-400">Copied!</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3 h-3" />
+                              <span>Copy CLI</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                      <div className="p-2 rounded bg-neutral-100 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 font-mono text-[11px] text-neutral-700 dark:text-neutral-300 select-all overflow-x-auto whitespace-nowrap">
+                        {syncCmd}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {/* Quick instructions */}
+          <div className="p-4 rounded-xl border border-dashed border-neutral-200 dark:border-neutral-800 text-xs font-mono text-neutral-500 space-y-2">
+            <div className="font-semibold text-neutral-700 dark:text-neutral-300 flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-neutral-500" />
+              <span>Alpha Pipeline Tips</span>
+            </div>
+            <p className="font-sans text-neutral-600 dark:text-neutral-400 leading-relaxed">
+              Use <code className="font-mono text-[11px] px-1 py-0.5 bg-neutral-100 dark:bg-neutral-900 rounded">--skip-existing</code> when running multiple sync jobs to instantly bypass tickers already parsed into <code className="font-mono text-[11px] px-1 py-0.5 bg-neutral-100 dark:bg-neutral-900 rounded">data/sec.db</code>. Run <code className="font-mono text-[11px] px-1 py-0.5 bg-neutral-100 dark:bg-neutral-900 rounded">./sec universe</code> from your terminal at any time to inspect coverage stats across all universe files.
+            </p>
           </div>
         </div>
       )}

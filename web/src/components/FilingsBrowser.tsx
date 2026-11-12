@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react'
-import { ExternalLink, Search, FileText, Copy, Check, X, FileSearch } from 'lucide-react'
+import { ExternalLink, Search, FileText, Copy, Check, X, FileSearch, GitCompare } from 'lucide-react'
 import { FilingItem, RawFactItem, AuditResponse } from '../types'
 import { formatDate } from '../lib/format'
+import { FilingsDiff } from './FilingsDiff'
 
 interface FilingsBrowserProps {
   ticker: string
@@ -18,9 +19,11 @@ export const FilingsBrowser: React.FC<FilingsBrowserProps> = ({ ticker }) => {
 
   // Quick Reader & Inspector State
   const [selectedFiling, setSelectedFiling] = useState<FilingItem | null>(null)
+  const [inspectorTab, setInspectorTab] = useState<'facts' | 'reader'>('facts')
   const [auditFacts, setAuditFacts] = useState<RawFactItem[]>([])
   const [loadingAudit, setLoadingAudit] = useState(false)
   const [copiedAccession, setCopiedAccession] = useState(false)
+  const [mainView, setMainView] = useState<'filings' | 'diff'>('filings')
 
   // Fetch filing list
   useEffect(() => {
@@ -103,8 +106,41 @@ export const FilingsBrowser: React.FC<FilingsBrowserProps> = ({ ticker }) => {
 
   return (
     <div className="space-y-6 animate-in fade-in duration-150">
-      {/* Filters & Search Toolbar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 text-xs font-mono">
+      {/* Top Main Tab Toggle: Filings Directory vs. 10-K Redline & Diff */}
+      <div className="flex items-center gap-2 border-b border-neutral-200 dark:border-neutral-800 pb-3">
+        <button
+          onClick={() => setMainView('filings')}
+          className={`px-3 py-1.5 rounded text-xs font-mono transition-colors flex items-center gap-1.5 ${
+            mainView === 'filings'
+              ? 'bg-neutral-900 text-white dark:bg-white dark:text-black font-semibold'
+              : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white'
+          }`}
+        >
+          <FileText className="w-3.5 h-3.5" />
+          <span>Saved SEC Filings ({filings.length})</span>
+        </button>
+        <button
+          onClick={() => setMainView('diff')}
+          className={`px-3 py-1.5 rounded text-xs font-mono transition-colors flex items-center gap-1.5 ${
+            mainView === 'diff'
+              ? 'bg-neutral-900 text-white dark:bg-white dark:text-black font-semibold'
+              : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white'
+          }`}
+        >
+          <GitCompare className="w-3.5 h-3.5 text-amber-500" />
+          <span>10-K Redline &amp; Diff (Item 1A / Item 7)</span>
+          <span className="px-1.5 py-0.2 rounded text-[9px] bg-amber-500/20 text-amber-700 dark:text-amber-300 font-sans uppercase font-semibold">
+            Institutional
+          </span>
+        </button>
+      </div>
+
+      {mainView === 'diff' ? (
+        <FilingsDiff ticker={ticker} />
+      ) : (
+        <>
+          {/* Filters & Search Toolbar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 text-xs font-mono">
         {/* Form Filter Segments */}
         <div className="flex items-center border border-neutral-300 dark:border-neutral-800 divide-x divide-neutral-300 dark:divide-neutral-800">
           {['ALL', '10-K', '10-Q', '8-K', 'SC 13G'].map((f) => (
@@ -349,80 +385,180 @@ export const FilingsBrowser: React.FC<FilingsBrowserProps> = ({ ticker }) => {
                 </div>
               </div>
 
-              {/* Body: Extracted XBRL Facts */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                <div className="flex items-center justify-between text-xs font-sans text-neutral-500">
-                  <span className="font-medium text-neutral-900 dark:text-neutral-200">
-                    Standardized XBRL Facts ({matchingFacts.length})
-                  </span>
-                  <span className="font-mono text-[11px]">
-                    Extracted from official SEC facts table
-                  </span>
-                </div>
-
-                {loadingAudit ? (
-                  <div className="py-16 text-center text-neutral-400 font-mono">
-                    Matching XBRL facts for accession {selectedFiling.accession}...
-                  </div>
-                ) : matchingFacts.length === 0 ? (
-                  <div className="p-8 text-center text-neutral-400 font-mono space-y-2">
-                    <p>No tagged line-item facts found for this filing accession.</p>
-                    <p className="text-[11px] text-neutral-500 font-sans">
-                      Use the "Read Document" button above to view the complete SEC exhibit directly on EDGAR.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="border border-neutral-200 dark:border-neutral-800 overflow-hidden">
-                    <table className="w-full text-left text-xs font-mono">
-                      <thead>
-                        <tr className="border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900/50 text-neutral-500 font-sans">
-                          <th className="py-2 px-3">Concept & Taxonomy</th>
-                          <th className="py-2 px-3">Period End</th>
-                          <th className="py-2 px-3 text-right">Value</th>
-                          <th className="py-2 px-3">Form</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-neutral-100 dark:divide-neutral-900">
-                        {matchingFacts.map((f, i) => (
-                          <tr key={i} className="hover:bg-neutral-50 dark:hover:bg-neutral-900/50">
-                            <td className="py-2 px-3">
-                              <span className="text-neutral-500 font-mono text-[11px]">
-                                {f.taxonomy}:
-                              </span>
-                              <span className="text-neutral-900 dark:text-white ml-1">
-                                {f.concept}
-                              </span>
-                              {f.label && f.label !== f.concept && (
-                                <div className="text-[10px] text-neutral-400 font-sans truncate max-w-md">
-                                  {f.label}
-                                </div>
-                              )}
-                            </td>
-                            <td className="py-2 px-3 text-neutral-600 dark:text-neutral-400">
-                              {f.period_end}
-                            </td>
-                            <td className="py-2 px-3 text-right tabular-nums text-neutral-900 dark:text-white font-medium">
-                              {f.value !== undefined ? f.value.toLocaleString() : '—'}
-                              <span className="text-[10px] text-neutral-400 ml-1">
-                                {f.unit}
-                              </span>
-                            </td>
-                            <td className="py-2 px-3">
-                              <span className="px-1.5 py-0.5 bg-neutral-100 dark:bg-neutral-900 text-[10px]">
-                                {f.form}
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+              {/* Modal Sub-Tabs */}
+              <div className="px-5 border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50/40 dark:bg-neutral-900/40 flex items-center gap-4 text-xs font-mono">
+                <button
+                  onClick={() => setInspectorTab('facts')}
+                  className={`py-2 border-b-2 -mb-px transition-colors ${
+                    inspectorTab === 'facts'
+                      ? 'border-neutral-900 dark:border-white text-neutral-950 dark:text-white font-medium'
+                      : 'border-transparent text-neutral-500 hover:text-neutral-900 dark:hover:text-white'
+                  }`}
+                >
+                  Standardized XBRL Facts ({matchingFacts.length})
+                </button>
+                <button
+                  onClick={() => setInspectorTab('reader')}
+                  className={`py-2 border-b-2 -mb-px transition-colors ${
+                    inspectorTab === 'reader'
+                      ? 'border-neutral-900 dark:border-white text-neutral-950 dark:text-white font-medium'
+                      : 'border-transparent text-neutral-500 hover:text-neutral-900 dark:hover:text-white'
+                  }`}
+                >
+                  Document Details &amp; Direct EDGAR Filing
+                </button>
               </div>
+
+              {/* Body: Extracted XBRL Facts */}
+              {inspectorTab === 'facts' && (
+                <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                  <div className="flex items-center justify-between text-xs font-sans text-neutral-500">
+                    <span className="font-medium text-neutral-900 dark:text-neutral-200">
+                      Standardized XBRL Facts ({matchingFacts.length})
+                    </span>
+                    <span className="font-mono text-[11px]">
+                      Extracted from official SEC facts table
+                    </span>
+                  </div>
+
+                  {loadingAudit ? (
+                    <div className="py-16 text-center text-neutral-400 font-mono">
+                      Matching XBRL facts for accession {selectedFiling.accession}...
+                    </div>
+                  ) : matchingFacts.length === 0 ? (
+                    <div className="p-8 text-center text-neutral-400 font-mono space-y-2">
+                      <p>No tagged line-item facts found for this filing accession.</p>
+                      <p className="text-[11px] text-neutral-500 font-sans">
+                        Use the "Document Details &amp; Direct EDGAR Filing" tab to view the primary document.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="border border-neutral-200 dark:border-neutral-800 overflow-hidden">
+                      <table className="w-full text-left text-xs font-mono">
+                        <thead>
+                          <tr className="border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900/50 text-neutral-500 font-sans">
+                            <th className="py-2 px-3">Concept &amp; Taxonomy</th>
+                            <th className="py-2 px-3">Period End</th>
+                            <th className="py-2 px-3 text-right">Value</th>
+                            <th className="py-2 px-3">Form</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-neutral-100 dark:divide-neutral-900">
+                          {matchingFacts.map((f, i) => (
+                            <tr key={i} className="hover:bg-neutral-50 dark:hover:bg-neutral-900/50">
+                              <td className="py-2 px-3">
+                                <span className="text-neutral-500 font-mono text-[11px]">
+                                  {f.taxonomy}:
+                                </span>
+                                <span className="text-neutral-900 dark:text-white ml-1">
+                                  {f.concept}
+                                </span>
+                                {f.label && f.label !== f.concept && (
+                                  <div className="text-[10px] text-neutral-400 font-sans truncate max-w-md">
+                                    {f.label}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="py-2 px-3 text-neutral-600 dark:text-neutral-400">
+                                {f.period_end}
+                              </td>
+                              <td className="py-2 px-3 text-right tabular-nums text-neutral-900 dark:text-white font-medium">
+                                {f.value !== undefined ? f.value.toLocaleString() : '—'}
+                                <span className="text-[10px] text-neutral-400 ml-1">
+                                  {f.unit}
+                                </span>
+                              </td>
+                              <td className="py-2 px-3">
+                                <span className="px-1.5 py-0.5 bg-neutral-100 dark:bg-neutral-900 text-[10px]">
+                                  {f.form}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Body: Direct EDGAR Filing & Archive Document Details */}
+              {inspectorTab === 'reader' && (
+                <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                  <div className="border border-neutral-200 dark:border-neutral-800 p-5 rounded-lg bg-neutral-50/50 dark:bg-neutral-900/30 space-y-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-neutral-200 dark:border-neutral-800 pb-4">
+                      <div>
+                        <span className="text-[10px] uppercase tracking-wider text-neutral-400 font-sans block">
+                          Primary Exhibit Document
+                        </span>
+                        <h4 className="text-sm font-semibold text-neutral-950 dark:text-white mt-0.5">
+                          {selectedFiling.primary_document}
+                        </h4>
+                        <span className="text-neutral-500 text-xs font-sans">
+                          {selectedFiling.document_title || `Official SEC Form ${selectedFiling.form} Exhibit`}
+                        </span>
+                      </div>
+
+                      {selectedFiling.url && (
+                        <a
+                          href={selectedFiling.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-neutral-900 text-white dark:bg-white dark:text-black hover:opacity-90 rounded font-medium text-xs font-sans transition-opacity self-start sm:self-auto"
+                        >
+                          <span>Open Filing in SEC EDGAR Viewer</span>
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </a>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-mono">
+                      <div>
+                        <span className="text-neutral-400 text-[11px] block">Full Accession Number</span>
+                        <span className="text-neutral-900 dark:text-white font-medium select-all">
+                          {selectedFiling.accession}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-neutral-400 text-[11px] block">Central Index Key (CIK)</span>
+                        <span className="text-neutral-900 dark:text-white font-medium select-all">
+                          {selectedFiling.cik}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-neutral-400 text-[11px] block">Filing Date</span>
+                        <span className="text-neutral-900 dark:text-white font-medium">
+                          {formatDate(selectedFiling.filing_date)}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-neutral-400 text-[11px] block">Report Period End</span>
+                        <span className="text-neutral-900 dark:text-white font-medium">
+                          {formatDate(selectedFiling.report_date)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="pt-2 border-t border-neutral-200 dark:border-neutral-800 flex flex-wrap items-center gap-3">
+                      <a
+                        href={secArchiveURL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 px-3 py-1.5 border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-800 dark:text-neutral-200 rounded text-xs font-sans transition-colors"
+                      >
+                        <span>Browse Raw SEC Directory Archives</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )
       })()}
+        </>
+      )}
     </div>
   )
 }

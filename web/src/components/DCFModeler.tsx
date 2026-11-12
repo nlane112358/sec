@@ -18,17 +18,20 @@ import {
 } from 'lucide-react'
 import { SummaryResponse, DCFResult, ReverseDCFResult, QuoteResponse } from '../types'
 import { formatCurrency, formatShares, formatPercent } from '../lib/format'
+import { quoteCache } from '../lib/cache'
+import { FootballFieldChart } from './FootballFieldChart'
 
 interface DCFModelerProps {
   summary: SummaryResponse
   compact: boolean
+  quote?: QuoteResponse | null
 }
 
-type ValuationSubTab = 'forward' | 'reverse' | 'simulation'
+type ValuationSubTab = 'forward' | 'reverse' | 'simulation' | 'field'
 
 const MONTE_CARLO_TRIALS = 10_000
 
-export const DCFModeler: React.FC<DCFModelerProps> = ({ summary, compact }) => {
+export const DCFModeler: React.FC<DCFModelerProps> = ({ summary, compact, quote }) => {
   const [subTab, setSubTab] = useState<ValuationSubTab>('forward')
   const [copiedLink, setCopiedLink] = useState(false)
 
@@ -125,7 +128,12 @@ export const DCFModeler: React.FC<DCFModelerProps> = ({ summary, compact }) => {
   const [loadingReverse, setLoadingReverse] = useState(false)
   const [reverseError, setReverseError] = useState<string | null>(null)
 
-  const [sharePrice, setSharePrice] = useState<number>(150)
+  const [sharePrice, setSharePrice] = useState<number>(() => {
+    if (quote && quote.price > 0) return parseFloat(quote.price.toFixed(2))
+    const cached = quoteCache.get(summary.ticker)
+    if (cached && cached.price > 0) return parseFloat(cached.price.toFixed(2))
+    return 0
+  })
   const [reverseMode, setReverseMode] = useState<'owner' | 'fcf' | 'revenue'>('owner')
   const [reverseTerminal, setReverseTerminal] = useState<number>(2.5)
   const [reverseYears, setReverseYears] = useState<number>(5)
@@ -144,6 +152,7 @@ export const DCFModeler: React.FC<DCFModelerProps> = ({ summary, compact }) => {
   const [bullWeight, setBullWeight] = useState<number>(25)
 
   const [monteCarloResults, setMonteCarloResults] = useState<number[]>([])
+  const [liveQuote, setLiveQuote] = useState<QuoteResponse | null>(() => quote || quoteCache.get(summary.ticker) || null)
 
   // Extract latest shares count for price <-> market cap calculations
   const sharesMetric = summary.metrics.find(
@@ -155,14 +164,25 @@ export const DCFModeler: React.FC<DCFModelerProps> = ({ summary, compact }) => {
       ? sharesMetric.Values[0].Value
       : 1e9
 
-  // Fetch live market quote to seed share price
+  // Seed and synchronize live market quote for share price
   useEffect(() => {
-    if (!summary?.ticker) return
+    if (quote && quote.price > 0) {
+      setSharePrice(parseFloat(quote.price.toFixed(2)))
+      setLiveQuote(quote)
+      return
+    }
+    const cached = quoteCache.get(summary.ticker)
+    if (cached && cached.price > 0) {
+      setSharePrice(parseFloat(cached.price.toFixed(2)))
+      setLiveQuote(cached)
+      return
+    }
     let ignore = false
     fetch(`/api/company/${summary.ticker}/quote`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data: QuoteResponse | null) => {
         if (!ignore && data && data.price > 0) {
+          setLiveQuote(data)
           setSharePrice(parseFloat(data.price.toFixed(2)))
         }
       })
@@ -170,7 +190,7 @@ export const DCFModeler: React.FC<DCFModelerProps> = ({ summary, compact }) => {
     return () => {
       ignore = true
     }
-  }, [summary?.ticker])
+  }, [summary.ticker, quote])
 
   // Pure DCF Per-Share Valuation Helper with Growth Fading support
   const calculatePerShareValue = useCallback(
@@ -208,21 +228,177 @@ export const DCFModeler: React.FC<DCFModelerProps> = ({ summary, compact }) => {
     [growthProfile]
   )
 
-  // Dynamic per-share value that reacts to growthProfile and slider adjustments
-  const displayPerShareValue = useMemo(() => {
-    if (!dcfResult || dcfResult.BaseFCF <= 0) return dcfResult?.ValuePerShare || 0
-    if (growthProfile === 'constant') return dcfResult.ValuePerShare
+  // Unified active DCF valuation model that synchronizes per-share value, EV bridge, and cash flow projections
+  const activeDCFModel = useMemo(() => {
+    if (!dcfResult || dcfResult.BaseFCF <= 0) {
+      return {
+        valuePerShare: dcfResult?.ValuePerShare || 0,
+        pvExplicit: dcfResult?.PVExplicitCashFlows || 0,
+        pvTerminal: dcfResult?.PVTerminalValue || 0,
+        enterpriseValue: dcfResult?.EnterpriseValue || 0,
+        equityValue: dcfResult?.EquityValue || 0,
+        projections: dcfResult?.Projections || [],
+      }
+    }
+
+    if (growthProfile === 'constant') {
+      return {
+        valuePerShare: dcfResult.ValuePerShare,
+        pvExplicit: dcfResult.PVExplicitCashFlows,
+        pvTerminal: dcfResult.PVTerminalValue,
+        enterpriseValue: dcfResult.EnterpriseValue,
+        equityValue: dcfResult.EquityValue,
+        projections: dcfResult.Projections,
+      }
+    }
+
+    // Faded growth profile calculation
     const fcf = dcfResult.BaseFCF
     const cash = dcfResult.Cash
     const debt = dcfResult.Debt
-    const shares = dcfResult.SharesOutstanding
-    const g = growthRate ?? dcfResult.GrowthRate * 100
-    const r = discountRate ?? dcfResult.DiscountRate * 100
-    const t = terminalRate
+    const shares = dcfResult.SharesOutstanding || latestShares
+    const g = (growthRate ?? dcfResult.GrowthRate * 100) / 100
+    const r = (discountRate ?? dcfResult.DiscountRate * 100) / 100
+    const t = terminalRate / 100
     const n = years
-    const val = calculatePerShareValue(fcf, cash, debt, shares, g, r, t, n)
-    return val > 0 ? val : dcfResult.ValuePerShare
-  }, [dcfResult, growthProfile, growthRate, discountRate, terminalRate, years, calculatePerShareValue])
+
+    if (r <= t || shares <= 0) {
+      return {
+        valuePerShare: dcfResult.ValuePerShare,
+        pvExplicit: dcfResult.PVExplicitCashFlows,
+        pvTerminal: dcfResult.PVTerminalValue,
+        enterpriseValue: dcfResult.EnterpriseValue,
+        equityValue: dcfResult.EquityValue,
+        projections: dcfResult.Projections,
+      }
+    }
+
+    let pvExplicit = 0
+    let currentCF = fcf
+    const projections = []
+
+    for (let y = 1; y <= n; y++) {
+      const stepG = g - ((y - 1) / n) * (g - t)
+      currentCF = currentCF * (1 + stepG)
+      const pv = currentCF / Math.pow(1 + r, y)
+      pvExplicit += pv
+      projections.push({
+        Year: y,
+        GrowthRate: stepG,
+        FreeCashFlow: currentCF,
+        PresentValue: pv,
+        Revenue: 0,
+        EBIT: 0,
+        NOPAT: 0,
+        DepreciationAmortization: 0,
+        CapitalExpenditure: 0,
+        ChangeInNWC: 0,
+        CapExWedge: 0,
+      })
+    }
+
+    const tv = (currentCF * (1 + t)) / (r - t)
+    const pvTerminal = tv / Math.pow(1 + r, n)
+    const enterpriseValue = pvExplicit + pvTerminal
+    const equityValue = enterpriseValue + cash - debt
+    const valuePerShare = Math.max(0, equityValue / shares)
+
+    return {
+      valuePerShare,
+      pvExplicit,
+      pvTerminal,
+      enterpriseValue,
+      equityValue,
+      projections,
+    }
+  }, [dcfResult, growthProfile, growthRate, discountRate, terminalRate, years, latestShares])
+
+  const displayPerShareValue = activeDCFModel.valuePerShare
+
+  // Responsive slider bounds that expand dynamically if the user adopts high growth or negative rates
+  const growthSliderMin = useMemo(() => {
+    return Math.min(-10, Math.floor(((growthRate ?? 10) - 5) / 10) * 10)
+  }, [growthRate])
+
+  const growthSliderMax = useMemo(() => {
+    return Math.max(40, Math.ceil(((growthRate ?? 10) + 10) / 10) * 10)
+  }, [growthRate])
+
+  // Memoized discrete scenarios (Bear, Base, Bull, Weighted)
+  const scenarios = useMemo(() => {
+    const baseG = growthRate ?? (dcfResult?.GrowthRate ? dcfResult.GrowthRate * 100 : 10)
+    const baseR = discountRate ?? (dcfResult?.DiscountRate ? dcfResult.DiscountRate * 100 : 8.5)
+    const baseT = terminalRate
+    const baseFCF = dcfResult?.BaseFCF || 0
+    const cash = dcfResult?.Cash || 0
+    const debt = dcfResult?.Debt || 0
+    const shares = dcfResult?.SharesOutstanding || latestShares
+
+    const bearG = baseG + bearGrowthDelta
+    const bearR = baseR + bearDiscountDelta
+    const bearT = Math.max(1.0, baseT - 1.0)
+    const bearVal = calculatePerShareValue(baseFCF, cash, debt, shares, bearG, bearR, bearT, years)
+
+    const baseVal = calculatePerShareValue(baseFCF, cash, debt, shares, baseG, baseR, baseT, years)
+
+    const bullG = baseG + bullGrowthDelta
+    const bullR = Math.max(3.5, baseR + bullDiscountDelta)
+    const bullT = baseT + 0.5
+    const bullVal = calculatePerShareValue(baseFCF, cash, debt, shares, bullG, bullR, bullT, years)
+
+    const wSum = bearWeight + baseWeight + bullWeight
+    const weightedVal =
+      wSum > 0
+        ? (bearVal * bearWeight + baseVal * baseWeight + bullVal * bullWeight) / wSum
+        : baseVal
+
+    const weightedG =
+      wSum > 0
+        ? (bearG * bearWeight + baseG * baseWeight + bullG * bullWeight) / wSum
+        : baseG
+    const weightedR =
+      wSum > 0
+        ? (bearR * bearWeight + baseR * baseWeight + bullR * bullWeight) / wSum
+        : baseR
+    const weightedT =
+      wSum > 0
+        ? (bearT * bearWeight + baseT * baseWeight + bullT * bullWeight) / wSum
+        : baseT
+
+    return {
+      baseG,
+      baseR,
+      baseT,
+      bearG,
+      bearR,
+      bearT,
+      bearVal,
+      baseVal,
+      bullG,
+      bullR,
+      bullT,
+      bullVal,
+      weightedVal,
+      weightedG,
+      weightedR,
+      weightedT,
+    }
+  }, [
+    growthRate,
+    dcfResult,
+    discountRate,
+    terminalRate,
+    latestShares,
+    bearGrowthDelta,
+    bearDiscountDelta,
+    calculatePerShareValue,
+    years,
+    bullGrowthDelta,
+    bullDiscountDelta,
+    bearWeight,
+    baseWeight,
+    bullWeight,
+  ])
 
   // Monte Carlo Simulation Runner
   const runMonteCarlo = useCallback(() => {
@@ -288,14 +464,15 @@ export const DCFModeler: React.FC<DCFModelerProps> = ({ summary, compact }) => {
         if (!ignore) {
           setDcfResult(data)
           if (growthRate === null) {
-            setGrowthRate(parseFloat((data.GrowthRate * 100).toFixed(1)))
+            const initialG = parseFloat((data.GrowthRate * 100).toFixed(1))
+            setGrowthRate(initialG)
+            // If forward or historical growth is high (>= 20%), default to fade profile for sustainable projections
+            if (initialG >= 20 || (data.HistoricalFCFCAGR && data.HistoricalFCFCAGR >= 0.20)) {
+              setGrowthProfile('fade')
+            }
           }
           if (discountRate === null) {
             setDiscountRate(parseFloat((data.DiscountRate * 100).toFixed(2)))
-          }
-          // Set initial default share price to the DCF per share price if default
-          if (sharePrice === 150 && data.ValuePerShare > 0) {
-            setSharePrice(parseFloat(data.ValuePerShare.toFixed(2)))
           }
         }
       } catch (err: any) {
@@ -387,6 +564,7 @@ export const DCFModeler: React.FC<DCFModelerProps> = ({ summary, compact }) => {
             { id: 'forward', label: '1. Forward DCF' },
             { id: 'reverse', label: '2. Reverse DCF (Expectations)' },
             { id: 'simulation', label: '3. Scenarios & Monte Carlo' },
+            { id: 'field', label: '4. Football Field (5 Ranges)' },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -530,26 +708,42 @@ export const DCFModeler: React.FC<DCFModelerProps> = ({ summary, compact }) => {
                       </div>
                       <input
                         type="range"
-                        min="-10"
-                        max="40"
+                        min={growthSliderMin}
+                        max={growthSliderMax}
                         step="0.5"
                         value={growthRate ?? 10}
                         onChange={(e) => setGrowthRate(parseFloat(e.target.value))}
                         className="w-full h-1 bg-neutral-200 dark:bg-neutral-800 appearance-none cursor-pointer accent-neutral-900 dark:accent-neutral-100"
                       />
                       <div className="flex justify-between text-[10px] text-neutral-400 font-mono">
-                        <span>-10%</span>
+                        <span>{growthSliderMin}%</span>
                         {dcfResult?.HasHistoricalFCFCAGR && mode === 'fcf' && (
-                          <span className="text-neutral-600 dark:text-neutral-400">
+                          <span
+                            title="Click to adopt 3-year historical FCF CAGR"
+                            onClick={() => {
+                              const histG = parseFloat((dcfResult.HistoricalFCFCAGR * 100).toFixed(1))
+                              setGrowthRate(histG)
+                              if (histG >= 20) setGrowthProfile('fade')
+                            }}
+                            className="cursor-pointer hover:text-neutral-900 dark:hover:text-white underline decoration-dotted text-neutral-600 dark:text-neutral-400"
+                          >
                             Hist 3Y FCF: {(dcfResult.HistoricalFCFCAGR * 100).toFixed(1)}%
                           </span>
                         )}
                         {dcfResult?.HasHistoricalRevenueCAGR && mode === 'revenue' && (
-                          <span className="text-neutral-600 dark:text-neutral-400">
+                          <span
+                            title="Click to adopt 3-year historical Revenue CAGR"
+                            onClick={() => {
+                              const histG = parseFloat((dcfResult.HistoricalRevenueCAGR * 100).toFixed(1))
+                              setGrowthRate(histG)
+                              if (histG >= 20) setGrowthProfile('fade')
+                            }}
+                            className="cursor-pointer hover:text-neutral-900 dark:hover:text-white underline decoration-dotted text-neutral-600 dark:text-neutral-400"
+                          >
                             Hist 3Y Rev: {(dcfResult.HistoricalRevenueCAGR * 100).toFixed(1)}%
                           </span>
                         )}
-                        <span>+40%</span>
+                        <span>+{growthSliderMax}%</span>
                       </div>
                     </div>
 
@@ -720,21 +914,27 @@ export const DCFModeler: React.FC<DCFModelerProps> = ({ summary, compact }) => {
                         )}
                       </div>
                     </div>
-                    {dcfResult && sharePrice > 0 && (
+                    {dcfResult && (
                       <div className="text-left sm:text-right font-mono text-xs">
                         <div className="text-neutral-500 text-[11px]">Current Market Price</div>
                         <div className="font-semibold text-neutral-900 dark:text-white">
-                          ${sharePrice.toFixed(2)}{' '}
-                          <span
-                            className={
-                              displayPerShareValue >= sharePrice
-                                ? 'text-emerald-600 dark:text-emerald-400 font-normal'
-                                : 'text-rose-600 dark:text-rose-400 font-normal'
-                            }
-                          >
-                            ({displayPerShareValue >= sharePrice ? '+' : ''}
-                            {(((displayPerShareValue - sharePrice) / sharePrice) * 100).toFixed(1)}%)
-                          </span>
+                          {sharePrice > 0 ? (
+                            <>
+                              ${sharePrice.toFixed(2)}{' '}
+                              <span
+                                className={
+                                  displayPerShareValue >= sharePrice
+                                    ? 'text-emerald-600 dark:text-emerald-400 font-normal'
+                                    : 'text-rose-600 dark:text-rose-400 font-normal'
+                                }
+                              >
+                                ({displayPerShareValue >= sharePrice ? '+' : ''}
+                                {(((displayPerShareValue - sharePrice) / sharePrice) * 100).toFixed(1)}%)
+                              </span>
+                            </>
+                          ) : (
+                            <span className="text-neutral-400 font-normal">Loading quote...</span>
+                          )}
                         </div>
                       </div>
                     )}
@@ -748,12 +948,12 @@ export const DCFModeler: React.FC<DCFModelerProps> = ({ summary, compact }) => {
                           PV of Explicit Cash Flows ({years}Y)
                         </td>
                         <td className="py-2 px-4 text-right tabular-nums text-neutral-500 text-[11px]">
-                          {dcfResult && dcfResult.EnterpriseValue > 0
-                            ? `${((dcfResult.PVExplicitCashFlows / dcfResult.EnterpriseValue) * 100).toFixed(1)}% of EV`
+                          {activeDCFModel.enterpriseValue > 0
+                            ? `${((activeDCFModel.pvExplicit / activeDCFModel.enterpriseValue) * 100).toFixed(1)}% of EV`
                             : ''}
                         </td>
                         <td className="py-2 px-4 text-right tabular-nums font-medium text-neutral-900 dark:text-white">
-                          {formatCurrency(dcfResult?.PVExplicitCashFlows, compact, dcfResult?.Currency)}
+                          {formatCurrency(activeDCFModel.pvExplicit, compact, dcfResult?.Currency)}
                         </td>
                       </tr>
                       <tr className="hover:bg-neutral-50/50 dark:hover:bg-neutral-900/30">
@@ -761,12 +961,12 @@ export const DCFModeler: React.FC<DCFModelerProps> = ({ summary, compact }) => {
                           PV of Perpetual Terminal Value ({terminalRate.toFixed(1)}% growth)
                         </td>
                         <td className="py-2 px-4 text-right tabular-nums text-neutral-500 text-[11px]">
-                          {dcfResult && dcfResult.EnterpriseValue > 0
-                            ? `${((dcfResult.PVTerminalValue / dcfResult.EnterpriseValue) * 100).toFixed(1)}% of EV`
+                          {activeDCFModel.enterpriseValue > 0
+                            ? `${((activeDCFModel.pvTerminal / activeDCFModel.enterpriseValue) * 100).toFixed(1)}% of EV`
                             : ''}
                         </td>
                         <td className="py-2 px-4 text-right tabular-nums font-medium text-neutral-900 dark:text-white">
-                          {formatCurrency(dcfResult?.PVTerminalValue, compact, dcfResult?.Currency)}
+                          {formatCurrency(activeDCFModel.pvTerminal, compact, dcfResult?.Currency)}
                         </td>
                       </tr>
                       <tr className="bg-neutral-50/40 dark:bg-neutral-900/20 font-semibold">
@@ -776,8 +976,8 @@ export const DCFModeler: React.FC<DCFModelerProps> = ({ summary, compact }) => {
                         <td className="py-2 px-4 text-right tabular-nums text-neutral-500 text-[11px]">
                           100.0%
                         </td>
-                        <td className="py-2 px-4 text-right tabular-nums text-neutral-950 dark:text-white">
-                          {formatCurrency(dcfResult?.EnterpriseValue, compact, dcfResult?.Currency)}
+                        <td className="py-2 px-4 text-right tabular-nums font-semibold text-neutral-950 dark:text-white">
+                          {formatCurrency(activeDCFModel.enterpriseValue, compact, dcfResult?.Currency)}
                         </td>
                       </tr>
                       <tr className="hover:bg-neutral-50/50 dark:hover:bg-neutral-900/30">
@@ -807,10 +1007,10 @@ export const DCFModeler: React.FC<DCFModelerProps> = ({ summary, compact }) => {
                           (=) Implied Equity Value
                         </td>
                         <td className="py-2.5 px-4 text-right tabular-nums text-neutral-500 text-[11px]">
-                          {formatShares(dcfResult?.SharesOutstanding)} shares
+                          {formatShares(dcfResult?.SharesOutstanding)}
                         </td>
-                        <td className="py-2.5 px-4 text-right tabular-nums text-neutral-950 dark:text-white">
-                          {formatCurrency(dcfResult?.EquityValue, compact, dcfResult?.Currency)}
+                        <td className="py-2.5 px-4 text-right tabular-nums text-neutral-950 dark:text-white font-bold">
+                          {formatCurrency(activeDCFModel.equityValue, compact, dcfResult?.Currency)}
                         </td>
                       </tr>
                     </tbody>
@@ -820,14 +1020,14 @@ export const DCFModeler: React.FC<DCFModelerProps> = ({ summary, compact }) => {
             </div>
 
             {/* Middle Section: Cash Flow Forecast Schedule */}
-            {dcfResult && dcfResult.Projections && dcfResult.Projections.length > 0 && (
+            {activeDCFModel.projections.length > 0 && (
               <div className="border-t border-neutral-200 dark:border-neutral-800">
                 <div className="px-4 py-2 bg-neutral-50/60 dark:bg-neutral-900/40 border-b border-neutral-200 dark:border-neutral-800 flex justify-between items-center text-xs font-mono">
                   <span className="text-[11px] uppercase tracking-wider text-neutral-500 font-medium">
                     Cash Flow Forecast Schedule ({years} Years)
                   </span>
                   <span className="text-neutral-500 text-[11px]">
-                    Discount Factor: (1 + WACC)^{'{t}'} • WACC = {(dcfResult.DiscountRate * 100).toFixed(2)}%
+                    Discount Factor: (1 + WACC)^{'{t}'} • WACC = {(dcfResult?.DiscountRate ? dcfResult.DiscountRate * 100 : discountRate ?? 8.5).toFixed(2)}%
                   </span>
                 </div>
                 <div className="overflow-x-auto">
@@ -835,7 +1035,7 @@ export const DCFModeler: React.FC<DCFModelerProps> = ({ summary, compact }) => {
                     <thead>
                       <tr className="border-b border-neutral-200 dark:border-neutral-800 text-neutral-500 text-[11px] uppercase">
                         <th className="py-2 px-4 font-normal">Line Item</th>
-                        {dcfResult.Projections.map((p) => (
+                        {activeDCFModel.projections.map((p) => (
                           <th key={p.Year} className="py-2 px-4 font-normal text-right tabular-nums">
                             Year {p.Year}
                           </th>
@@ -847,12 +1047,12 @@ export const DCFModeler: React.FC<DCFModelerProps> = ({ summary, compact }) => {
                         <td className="py-2 px-4 text-neutral-700 dark:text-neutral-300 font-medium">
                           Forecast Free Cash Flow
                         </td>
-                        {dcfResult.Projections.map((p) => (
+                        {activeDCFModel.projections.map((p) => (
                           <td
                             key={p.Year}
                             className="py-2 px-4 text-right tabular-nums text-neutral-950 dark:text-white"
                           >
-                            {formatCurrency(p.FreeCashFlow, compact, dcfResult.Currency)}
+                            {formatCurrency(p.FreeCashFlow, compact, dcfResult?.Currency)}
                           </td>
                         ))}
                       </tr>
@@ -860,12 +1060,12 @@ export const DCFModeler: React.FC<DCFModelerProps> = ({ summary, compact }) => {
                         <td className="py-2 px-4 text-neutral-500">
                           Present Value (PV Discounted)
                         </td>
-                        {dcfResult.Projections.map((p) => (
+                        {activeDCFModel.projections.map((p) => (
                           <td
                             key={p.Year}
                             className="py-2 px-4 text-right tabular-nums text-neutral-600 dark:text-neutral-400 font-medium"
                           >
-                            {formatCurrency(p.PresentValue, compact, dcfResult.Currency)}
+                            {formatCurrency(p.PresentValue, compact, dcfResult?.Currency)}
                           </td>
                         ))}
                       </tr>
@@ -918,9 +1118,36 @@ export const DCFModeler: React.FC<DCFModelerProps> = ({ summary, compact }) => {
                               {(dr * 100).toFixed(2)}%
                             </td>
                             {dcfResult.Sensitivity.TerminalGrowthRates.map((tr, colIdx) => {
-                              const val = dcfResult.Sensitivity.PerShare[rowIdx][colIdx]
+                              const rawVal = dcfResult.Sensitivity.PerShare[rowIdx][colIdx]
+                              const val =
+                                growthProfile === 'fade'
+                                  ? calculatePerShareValue(
+                                      dcfResult.BaseFCF,
+                                      dcfResult.Cash,
+                                      dcfResult.Debt,
+                                      dcfResult.SharesOutstanding || latestShares,
+                                      growthRate ?? dcfResult.GrowthRate * 100,
+                                      dr * 100,
+                                      tr * 100,
+                                      years
+                                    ) || rawVal
+                                  : rawVal
                               const isCurrentCell =
                                 isCurrentRow && Math.abs(tr - dcfResult.TerminalRate) < 0.001
+                              const upsidePct = sharePrice > 0 ? ((val - sharePrice) / sharePrice) * 100 : 0
+
+                              let heatmapClass = 'hover:bg-neutral-100 dark:hover:bg-neutral-900 text-neutral-800 dark:text-neutral-200'
+                              if (sharePrice > 0) {
+                                if (upsidePct >= 20) {
+                                  heatmapClass = 'bg-emerald-500/15 text-emerald-800 dark:text-emerald-300 font-semibold'
+                                } else if (upsidePct >= 5) {
+                                  heatmapClass = 'bg-emerald-500/8 text-emerald-700 dark:text-emerald-400'
+                                } else if (upsidePct <= -20) {
+                                  heatmapClass = 'bg-rose-500/15 text-rose-800 dark:text-rose-300 font-semibold'
+                                } else if (upsidePct <= -5) {
+                                  heatmapClass = 'bg-rose-500/8 text-rose-700 dark:text-rose-400'
+                                }
+                              }
 
                               return (
                                 <td
@@ -929,12 +1156,12 @@ export const DCFModeler: React.FC<DCFModelerProps> = ({ summary, compact }) => {
                                     setDiscountRate(parseFloat((dr * 100).toFixed(2)))
                                     setTerminalRate(parseFloat((tr * 100).toFixed(1)))
                                   }}
-                                  className={`py-2 px-3 text-right tabular-nums text-xs border border-neutral-200 dark:border-neutral-800 cursor-pointer transition-colors ${
+                                  className={`py-2 px-3 text-right tabular-nums text-xs border border-neutral-200 dark:border-neutral-800 cursor-pointer transition-all ${heatmapClass} ${
                                     isCurrentCell
-                                      ? 'bg-neutral-950 text-white dark:bg-white dark:text-black font-bold'
-                                      : 'hover:bg-neutral-100 dark:hover:bg-neutral-900 text-neutral-800 dark:text-neutral-200'
+                                      ? 'ring-2 ring-indigo-500 dark:ring-indigo-400 bg-neutral-950 text-white dark:bg-white dark:text-black font-bold z-10'
+                                      : ''
                                   }`}
-                                  title={`Adopt Discount ${(dr * 100).toFixed(2)}% & Terminal ${(tr * 100).toFixed(1)}%`}
+                                  title={`Adopt Discount ${(dr * 100).toFixed(2)}% & Terminal ${(tr * 100).toFixed(1)}% (${upsidePct >= 0 ? '+' : ''}${upsidePct.toFixed(1)}% vs $${sharePrice.toFixed(2)})`}
                                 >
                                   ${val.toFixed(2)}
                                 </td>
@@ -1123,6 +1350,27 @@ export const DCFModeler: React.FC<DCFModelerProps> = ({ summary, compact }) => {
                     </div>
                   </div>
 
+                  {/* Expectations Arbitrage Spread Bar */}
+                  {reverseResult && reverseResult.HasHistoricalCAGR && (() => {
+                    const spread = reverseResult.ImpliedGrowth - reverseResult.HistoricalCAGR
+                    const isFavorable = spread < 0
+                    return (
+                      <div className="p-3 mx-4 my-3 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-900/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs font-mono">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] text-neutral-400 uppercase tracking-wider font-sans">Arbitrage Spread:</span>
+                          <span className={`font-semibold ${isFavorable ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                            {spread > 0 ? '+' : ''}{(spread * 100).toFixed(1)}% pts
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-neutral-500 font-sans">
+                          {isFavorable
+                            ? 'Favorable: Market prices slower growth than historical run-rate (Margin of Safety)'
+                            : 'Aggressive: Market prices growth acceleration above historical run-rate'}
+                        </span>
+                      </div>
+                    )
+                  })()}
+
                   {/* Expectations Schedule Table */}
                   <table className="w-full text-left font-mono text-xs divide-y divide-neutral-100 dark:divide-neutral-900">
                     <tbody className="divide-y divide-neutral-100 dark:divide-neutral-900">
@@ -1177,7 +1425,7 @@ export const DCFModeler: React.FC<DCFModelerProps> = ({ summary, compact }) => {
                           Target Market Capitalization
                         </td>
                         <td className="py-2 px-4 text-right tabular-nums text-neutral-400 text-[11px]">
-                          {formatShares(latestShares)} shares
+                          {formatShares(latestShares)}
                         </td>
                         <td className="py-2 px-4 text-right tabular-nums font-medium text-neutral-900 dark:text-white">
                           {formatCurrency(reverseResult?.MarketCap, compact, reverseResult?.Unit)}
@@ -1255,48 +1503,28 @@ export const DCFModeler: React.FC<DCFModelerProps> = ({ summary, compact }) => {
         <div className="space-y-6 animate-in fade-in duration-150">
           {/* Part 1: Continuous Multi-Scenario Valuation Grid */}
           {(() => {
-            const baseG = growthRate ?? (dcfResult?.GrowthRate ? dcfResult.GrowthRate * 100 : 10)
-            const baseR = discountRate ?? (dcfResult?.DiscountRate ? dcfResult.DiscountRate * 100 : 8.5)
-            const baseT = terminalRate
-            const baseFCF = dcfResult?.BaseFCF || 0
-            const cash = dcfResult?.Cash || 0
-            const debt = dcfResult?.Debt || 0
-            const shares = dcfResult?.SharesOutstanding || latestShares
-
-            const bearG = baseG + bearGrowthDelta
-            const bearR = baseR + bearDiscountDelta
-            const bearT = Math.max(1.0, baseT - 1.0)
-            const bearVal = calculatePerShareValue(baseFCF, cash, debt, shares, bearG, bearR, bearT, years)
+            const {
+              baseG,
+              baseR,
+              baseT,
+              bearG,
+              bearR,
+              bearT,
+              bearVal,
+              baseVal,
+              bullG,
+              bullR,
+              bullT,
+              bullVal,
+              weightedVal,
+              weightedG,
+              weightedR,
+              weightedT,
+            } = scenarios
             const bearSpread = sharePrice > 0 ? ((bearVal - sharePrice) / sharePrice) * 100 : 0
-
-            const baseVal = calculatePerShareValue(baseFCF, cash, debt, shares, baseG, baseR, baseT, years)
             const baseSpread = sharePrice > 0 ? ((baseVal - sharePrice) / sharePrice) * 100 : 0
-
-            const bullG = baseG + bullGrowthDelta
-            const bullR = Math.max(3.5, baseR + bullDiscountDelta)
-            const bullT = baseT + 0.5
-            const bullVal = calculatePerShareValue(baseFCF, cash, debt, shares, bullG, bullR, bullT, years)
             const bullSpread = sharePrice > 0 ? ((bullVal - sharePrice) / sharePrice) * 100 : 0
-
-            const wSum = bearWeight + baseWeight + bullWeight
-            const weightedVal =
-              wSum > 0
-                ? (bearVal * bearWeight + baseVal * baseWeight + bullVal * bullWeight) / wSum
-                : baseVal
             const weightedSpread = sharePrice > 0 ? ((weightedVal - sharePrice) / sharePrice) * 100 : 0
-
-            const weightedG =
-              wSum > 0
-                ? (bearG * bearWeight + baseG * baseWeight + bullG * bullWeight) / wSum
-                : baseG
-            const weightedR =
-              wSum > 0
-                ? (bearR * bearWeight + baseR * baseWeight + bullR * bullWeight) / wSum
-                : baseR
-            const weightedT =
-              wSum > 0
-                ? (bearT * bearWeight + baseT * baseWeight + bullT * bullWeight) / wSum
-                : baseT
 
             return (
               <div className="border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950">
@@ -1676,6 +1904,35 @@ export const DCFModeler: React.FC<DCFModelerProps> = ({ summary, compact }) => {
               )
             })()}
           </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* FOOTBALL FIELD VALUATION VIEW                            */}
+      {/* ========================================================= */}
+      {subTab === 'field' && (
+        <div className="space-y-6 animate-in fade-in duration-150">
+          <FootballFieldChart
+            summary={summary}
+            quote={liveQuote || quote || null}
+            dcfResult={dcfResult}
+            customRanges={{
+              forwardDCF: {
+                low: Math.min(scenarios.bearVal, scenarios.baseVal),
+                mid: scenarios.baseVal,
+                high: Math.max(scenarios.bullVal, scenarios.baseVal),
+              },
+              monteCarlo:
+                monteCarloResults.length > 0
+                  ? {
+                      low: monteCarloResults[Math.floor(monteCarloResults.length * 0.1)],
+                      mid: monteCarloResults[Math.floor(monteCarloResults.length * 0.5)],
+                      high: monteCarloResults[Math.floor(monteCarloResults.length * 0.9)],
+                    }
+                  : undefined,
+            }}
+            onSelectDCFSubTab={(tab) => setSubTab(tab)}
+          />
         </div>
       )}
     </div>

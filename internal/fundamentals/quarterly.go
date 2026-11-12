@@ -148,7 +148,17 @@ func selectQuarterlyFact(facts []summaryFact, concepts []summaryConcept, period 
 						best = candidate
 					}
 				}
-				return SummaryValue{Value: best.value, Unit: best.unit, Present: true}, true
+				return SummaryValue{
+					Value:      best.value,
+					Unit:       best.unit,
+					Present:    true,
+					Taxonomy:   best.taxonomy,
+					Concept:    best.concept,
+					Form:       best.form,
+					FilingDate: best.filed,
+					Accession:  best.accession,
+					PeriodEnd:  best.end,
+				}, true
 			}
 		}
 		return SummaryValue{}, false
@@ -174,7 +184,17 @@ func selectQuarterlyFact(facts []summaryFact, concepts []summaryConcept, period 
 					best = candidate
 				}
 			}
-			return SummaryValue{Value: best.value, Unit: best.unit, Present: true}, true
+			return SummaryValue{
+				Value:      best.value,
+				Unit:       best.unit,
+				Present:    true,
+				Taxonomy:   best.taxonomy,
+				Concept:    best.concept,
+				Form:       best.form,
+				FilingDate: best.filed,
+				Accession:  best.accession,
+				PeriodEnd:  best.end,
+			}, true
 		}
 	}
 
@@ -194,7 +214,18 @@ func selectQuarterlyFact(facts []summaryFact, concepts []summaryConcept, period 
 					}
 					if strings.EqualFold(annFact.unit, ytdFact.unit) {
 						diff := annFact.value - ytdFact.value
-						return SummaryValue{Value: diff, Unit: annFact.unit, Present: true}, true
+						return SummaryValue{
+							Value:       diff,
+							Unit:        annFact.unit,
+							Present:     true,
+							Taxonomy:    annFact.taxonomy,
+							Concept:     annFact.concept,
+							Form:        annFact.form,
+							FilingDate:  annFact.filed,
+							Accession:   annFact.accession,
+							PeriodEnd:   period.End,
+							Calculation: fmt.Sprintf("Annual 10-K (%s) - YTD 9M (%s)", formatNumberBrief(annFact.value), formatNumberBrief(ytdFact.value)),
+						}, true
 					}
 				}
 			}
@@ -215,7 +246,18 @@ func selectQuarterlyFact(facts []summaryFact, concepts []summaryConcept, period 
 				}
 				if strings.EqualFold(ytd9Fact.unit, ytd6Fact.unit) {
 					diff := ytd9Fact.value - ytd6Fact.value
-					return SummaryValue{Value: diff, Unit: ytd9Fact.unit, Present: true}, true
+					return SummaryValue{
+						Value:       diff,
+						Unit:        ytd9Fact.unit,
+						Present:     true,
+						Taxonomy:    ytd9Fact.taxonomy,
+						Concept:     ytd9Fact.concept,
+						Form:        ytd9Fact.form,
+						FilingDate:  ytd9Fact.filed,
+						Accession:   ytd9Fact.accession,
+						PeriodEnd:   period.End,
+						Calculation: fmt.Sprintf("YTD 9M (%s) - YTD 6M (%s)", formatNumberBrief(ytd9Fact.value), formatNumberBrief(ytd6Fact.value)),
+					}, true
 				}
 			}
 		}
@@ -235,7 +277,18 @@ func selectQuarterlyFact(facts []summaryFact, concepts []summaryConcept, period 
 				}
 				if strings.EqualFold(ytd6Fact.unit, q1Fact.unit) {
 					diff := ytd6Fact.value - q1Fact.value
-					return SummaryValue{Value: diff, Unit: ytd6Fact.unit, Present: true}, true
+					return SummaryValue{
+						Value:       diff,
+						Unit:        ytd6Fact.unit,
+						Present:     true,
+						Taxonomy:    ytd6Fact.taxonomy,
+						Concept:     ytd6Fact.concept,
+						Form:        ytd6Fact.form,
+						FilingDate:  ytd6Fact.filed,
+						Accession:   ytd6Fact.accession,
+						PeriodEnd:   period.End,
+						Calculation: fmt.Sprintf("YTD 6M (%s) - Q1 3M (%s)", formatNumberBrief(ytd6Fact.value), formatNumberBrief(q1Fact.value)),
+					}, true
 				}
 			}
 		}
@@ -324,15 +377,29 @@ FROM sec_facts WHERE cik = ?`, cik)
 				capEx := summaryMetricValue(summary.Metrics, "Capital Expenditure", i)
 				if cashFlow.Present && capEx.Present && strings.EqualFold(cashFlow.Unit, capEx.Unit) {
 					metric.Values[i] = SummaryValue{
-						Value:   cashFlow.Value - math.Abs(capEx.Value),
-						Unit:    cashFlow.Unit,
-						Present: true,
+						Value:       cashFlow.Value - math.Abs(capEx.Value),
+						Unit:        cashFlow.Unit,
+						Present:     true,
+						Taxonomy:    cashFlow.Taxonomy,
+						Concept:     cashFlow.Concept,
+						Form:        cashFlow.Form,
+						FilingDate:  cashFlow.FilingDate,
+						Accession:   cashFlow.Accession,
+						PeriodEnd:   period.End,
+						Calculation: fmt.Sprintf("Operating Cash Flow (%s) - Capital Expenditure (%s)", formatNumberBrief(cashFlow.Value), formatNumberBrief(math.Abs(capEx.Value))),
 					}
 				} else if cashFlow.Present && !capEx.Present {
 					metric.Values[i] = SummaryValue{
-						Value:   cashFlow.Value,
-						Unit:    cashFlow.Unit,
-						Present: true,
+						Value:       cashFlow.Value,
+						Unit:        cashFlow.Unit,
+						Present:     true,
+						Taxonomy:    cashFlow.Taxonomy,
+						Concept:     cashFlow.Concept,
+						Form:        cashFlow.Form,
+						FilingDate:  cashFlow.FilingDate,
+						Accession:   cashFlow.Accession,
+						PeriodEnd:   period.End,
+						Calculation: "Operating Cash Flow (no CapEx reported)",
 					}
 				}
 			case definition.ownerEarnings:
@@ -340,9 +407,16 @@ FROM sec_facts WHERE cik = ?`, cik)
 				sbc := summaryMetricValue(summary.Metrics, "Stock-Based Compensation", i)
 				if freeCashFlow.Present && sbc.Present && strings.EqualFold(freeCashFlow.Unit, sbc.Unit) {
 					metric.Values[i] = SummaryValue{
-						Value:   freeCashFlow.Value - math.Abs(sbc.Value),
-						Unit:    freeCashFlow.Unit,
-						Present: true,
+						Value:       freeCashFlow.Value - math.Abs(sbc.Value),
+						Unit:        freeCashFlow.Unit,
+						Present:     true,
+						Taxonomy:    freeCashFlow.Taxonomy,
+						Concept:     freeCashFlow.Concept,
+						Form:        freeCashFlow.Form,
+						FilingDate:  freeCashFlow.FilingDate,
+						Accession:   freeCashFlow.Accession,
+						PeriodEnd:   period.End,
+						Calculation: fmt.Sprintf("Free Cash Flow (%s) - Stock-Based Compensation (%s)", formatNumberBrief(freeCashFlow.Value), formatNumberBrief(math.Abs(sbc.Value))),
 					}
 				}
 			case definition.name == "Capital Expenditure":
@@ -374,6 +448,27 @@ FROM sec_facts WHERE cik = ?`, cik)
 	deriveOperatingIncome(&summary)
 	sanitizeSharesOutstanding(&summary)
 	deriveQuarterlyIntangibles(&summary, s, facts)
+
+	for mIdx := range summary.Metrics {
+		metricName := summary.Metrics[mIdx].Name
+		for pIdx := range summary.Metrics[mIdx].Values {
+			val := &summary.Metrics[mIdx].Values[pIdx]
+			if val.Present && pIdx < len(summary.Periods) {
+				p := summary.Periods[pIdx]
+				label := p.Label
+				if label == "" {
+					if p.Quarter != "" && p.Year != "" {
+						label = p.Quarter + " " + p.Year
+					} else {
+						label = p.End
+					}
+				}
+				if val.Formula == "" {
+					val.Formula = fmt.Sprintf("=SEC(\"%s\", \"%s\", \"%s\")", summary.Ticker, metricName, label)
+				}
+			}
+		}
+	}
 
 	return summary, nil
 }
@@ -519,18 +614,32 @@ func LoadTTMSummary(ctx context.Context, s *store.Store, ticker ...string) (TTMS
 	res.Company = qSummary.Company
 	res.Ticker = qSummary.Ticker
 
-	latestQuarter := SummaryPeriod{Label: "TTM", Quarter: "TTM", Year: "TTM"}
+	hasQuarterlyPeriods := len(qSummary.Periods) > 0 && qSummary.Periods[0].Quarter != ""
+	latestQuarter := SummaryPeriod{Label: "TTM", Quarter: "TTM", Year: "TTM", Form: "TTM"}
 	if len(qSummary.Periods) > 0 {
-		latestQuarter.End = qSummary.Periods[0].End
-		latestQuarter.StartDate = qSummary.Periods[min(3, len(qSummary.Periods)-1)].StartDate
+		latestPeriod := qSummary.Periods[0]
+		latestQuarter.End = latestPeriod.End
+		if hasQuarterlyPeriods {
+			latestQuarter.StartDate = qSummary.Periods[min(3, len(qSummary.Periods)-1)].StartDate
+		} else {
+			latestQuarter.Year = latestPeriod.Year
+			latestQuarter.Quarter = ""
+			latestQuarter.Label = "FY " + latestPeriod.Year
+			latestQuarter.Form = latestPeriod.Form
+			latestQuarter.StartDate = latestPeriod.StartDate
+		}
 	}
 	res.TTMPeriod = latestQuarter
 
 	numQuarters := min(4, len(qSummary.Periods))
+	if !hasQuarterlyPeriods {
+		numQuarters = min(1, len(qSummary.Periods))
+	}
 
 	instantMetrics := map[string]bool{
 		"Cash & Equivalents":              true,
 		"Current Assets":                  true,
+		"Accounts Receivable":             true,
 		"Current Liabilities":             true,
 		"Total Assets":                    true,
 		"Debt / Borrowings":               true,
@@ -603,25 +712,45 @@ func LoadTTMSummary(ctx context.Context, s *store.Store, ticker ...string) (TTMS
 	inflectionTargets := []string{
 		"Revenue",
 		"Operating Income",
+		"Research & Development",
+		"Accounts Receivable",
 		"Net Income",
 		"Operating Cash Flow",
 		"Free Cash Flow",
 	}
+	inflectionPeriodLabel := ""
+	if len(qSummary.Periods) > 0 {
+		latestPeriod := qSummary.Periods[0]
+		inflectionPeriodLabel = latestPeriod.Label
+		if inflectionPeriodLabel == "" {
+			if latestPeriod.Year != "" {
+				inflectionPeriodLabel = "FY " + latestPeriod.Year
+			} else {
+				inflectionPeriodLabel = latestPeriod.End
+			}
+		}
+	}
+	priorYearOffset := 4
+	priorYoYBaseOffset := 5
+	if !hasQuarterlyPeriods {
+		priorYearOffset = 1
+		priorYoYBaseOffset = 2
+	}
 
 	for _, target := range inflectionTargets {
 		vals := namedMetric(qSummary, target)
-		if len(vals) < 5 {
+		if len(vals) <= priorYearOffset {
 			continue
 		}
-		q0 := vals[0] // Latest quarter
-		q1 := vals[1] // Prior quarter
-		q4 := vals[4] // Prior year same quarter
+		q0 := vals[0] // Latest quarter or fiscal year
+		q1 := vals[1] // Prior quarter or fiscal year
+		priorYear := vals[priorYearOffset]
 
-		if !q0.Present || !q4.Present || q4.Value == 0 {
+		if !q0.Present || !priorYear.Present || priorYear.Value == 0 {
 			continue
 		}
 
-		yoyGrowth := (q0.Value - q4.Value) / math.Abs(q4.Value)
+		yoyGrowth := (q0.Value - priorYear.Value) / math.Abs(priorYear.Value)
 		qoqGrowth := 0.0
 		if q1.Present && q1.Value != 0 {
 			qoqGrowth = (q0.Value - q1.Value) / math.Abs(q1.Value)
@@ -629,16 +758,17 @@ func LoadTTMSummary(ctx context.Context, s *store.Store, ticker ...string) (TTMS
 
 		priorYoY := 0.0
 		isAccel := false
-		if len(vals) >= 6 && vals[1].Present && vals[5].Present && vals[5].Value != 0 {
-			priorYoY = (vals[1].Value - vals[5].Value) / math.Abs(vals[5].Value)
+		if len(vals) > priorYoYBaseOffset && vals[1].Present && vals[priorYoYBaseOffset].Present && vals[priorYoYBaseOffset].Value != 0 {
+			priorYoY = (vals[1].Value - vals[priorYoYBaseOffset].Value) / math.Abs(vals[priorYoYBaseOffset].Value)
 			isAccel = yoyGrowth > priorYoY
 		}
 
 		res.Inflections = append(res.Inflections, QuarterlyInflection{
 			Metric:                target,
+			PeriodLabel:           inflectionPeriodLabel,
 			LatestValue:           q0.Value,
 			PriorQuarterValue:     q1.Value,
-			PriorYearQuarterValue: q4.Value,
+			PriorYearQuarterValue: priorYear.Value,
 			QoQGrowth:             qoqGrowth,
 			YoYGrowth:             yoyGrowth,
 			PriorYoYGrowth:        priorYoY,
@@ -663,18 +793,23 @@ func LoadTTMFinancialSummary(ctx context.Context, s *store.Store, ticker ...stri
 	}
 
 	ttmPeriod := SummaryPeriod{
-		Year:      "TTM",
+		Year:      ttm.TTMPeriod.Year,
 		End:       ttm.TTMPeriod.End,
-		Quarter:   "TTM",
-		Label:     "TTM",
-		Form:      "TTM",
+		Quarter:   ttm.TTMPeriod.Quarter,
+		Label:     ttm.TTMPeriod.Label,
+		Form:      ttm.TTMPeriod.Form,
 		StartDate: ttm.TTMPeriod.StartDate,
+	}
+	annualPeriods := annualSummary.Periods
+	dropLatestAnnual := ttm.TTMPeriod.Quarter == "" && len(annualPeriods) > 0 && annualPeriods[0].End == ttm.TTMPeriod.End
+	if dropLatestAnnual {
+		annualPeriods = annualPeriods[1:]
 	}
 
 	combined := FinancialSummary{
 		Company: annualSummary.Company,
 		Ticker:  annualSummary.Ticker,
-		Periods: append([]SummaryPeriod{ttmPeriod}, annualSummary.Periods...),
+		Periods: append([]SummaryPeriod{ttmPeriod}, annualPeriods...),
 	}
 
 	for _, def := range summaryMetricDefinitions {
@@ -687,6 +822,9 @@ func LoadTTMFinancialSummary(ctx context.Context, s *store.Store, ticker ...stri
 		}
 
 		annualVals := namedMetric(annualSummary, def.name)
+		if dropLatestAnnual && len(annualVals) > 0 {
+			annualVals = annualVals[1:]
+		}
 		allVals := append([]SummaryValue{ttmVal}, annualVals...)
 		combined.Metrics = append(combined.Metrics, SummaryMetric{
 			Name:   def.name,

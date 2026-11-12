@@ -1,14 +1,16 @@
 import React, { useEffect, useState } from 'react'
 import { Command } from 'cmdk'
-import { Search, Building, ArrowRight, Sun, Moon, DollarSign, FileText, Layers, Percent, X, GitCompare, Sparkles } from 'lucide-react'
-import { Company } from '../types'
+import { Search, Building, ArrowRight, Sun, Moon, DollarSign, FileText, Layers, Percent, X, GitCompare, Sparkles, Camera } from 'lucide-react'
+import { Company, DatabaseStats } from '../types'
 import { TabKey } from './Tabs'
 import { RainbowMode } from './RainbowBackground'
+import { prefetchSummary } from '../lib/cache'
 
 interface CommandMenuProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   companies: Company[]
+  stats?: DatabaseStats | null
   currentTicker: string
   onSelectTicker: (ticker: string) => void
   activeTab: string
@@ -18,12 +20,14 @@ interface CommandMenuProps {
   onToggleCompact: () => void
   rainbowMode: RainbowMode
   onCycleRainbowMode: () => void
+  onOpenTearSheet?: () => void
 }
 
 export const CommandMenu: React.FC<CommandMenuProps> = ({
   open,
   onOpenChange,
   companies,
+  stats,
   currentTicker,
   onSelectTicker,
   activeTab,
@@ -33,6 +37,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({
   onToggleCompact,
   rainbowMode,
   onCycleRainbowMode,
+  onOpenTearSheet,
 }) => {
   const [search, setSearch] = useState('')
 
@@ -77,7 +82,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({
             <Command.Input
               value={search}
               onValueChange={setSearch}
-              placeholder="Search 528 companies, sectors, or actions..."
+              placeholder={`Search ${stats ? stats.total_companies.toLocaleString() : companies.length || 'all'} companies, sectors, or actions...`}
               className="w-full bg-transparent py-3.5 text-sm outline-none placeholder:text-neutral-500 text-neutral-100"
               autoFocus
             />
@@ -103,6 +108,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({
                   <Command.Item
                     key={c.ticker}
                     value={`${c.ticker} ${c.name} ${c.sic_description}`}
+                    onMouseEnter={() => prefetchSummary(c.ticker)}
                     onSelect={() => {
                       onSelectTicker(c.ticker)
                       onOpenChange(false)
@@ -129,6 +135,23 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({
               heading="Views & Models"
               className="text-[11px] font-mono uppercase tracking-wider text-neutral-500 px-2 py-1.5 mt-2"
             >
+              {onOpenTearSheet && (
+                <Command.Item
+                  value="tear sheet export image png card share twitter substack slack ⌘⇧S"
+                  onSelect={() => {
+                    onOpenTearSheet()
+                    onOpenChange(false)
+                  }}
+                  className="flex items-center gap-3 px-3 py-2 rounded-lg text-xs text-neutral-300 hover:text-white hover:bg-neutral-900 cursor-pointer"
+                >
+                  <Camera className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Export Tear Sheet Card (2X Retina PNG)</span>
+                  <kbd className="ml-auto text-[10px] font-mono text-neutral-500 bg-neutral-900 px-1.5 py-0.5 rounded border border-neutral-800">
+                    ⌘⇧S
+                  </kbd>
+                </Command.Item>
+              )}
+
               <Command.Item
                 value="statements financials balance sheet income cash flow"
                 onSelect={() => {
@@ -198,7 +221,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({
                 className="flex items-center gap-3 px-3 py-2 rounded-lg text-xs text-neutral-300 hover:text-white hover:bg-neutral-900 cursor-pointer"
               >
                 <Percent className="w-3.5 h-3.5 text-neutral-400" />
-                <span>Universe Screener (528 Companies)</span>
+                <span>Universe Screener ({stats?.total_companies ? stats.total_companies.toLocaleString() : companies.length || 'Universe'} Companies)</span>
                 <kbd className="ml-auto text-[10px] font-mono text-neutral-500 bg-neutral-900 px-1.5 py-0.5 rounded border border-neutral-800">
                   5
                 </kbd>

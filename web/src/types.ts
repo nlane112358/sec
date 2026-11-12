@@ -18,6 +18,60 @@ export interface SummaryValue {
   Value: number
   Unit: string
   Present: boolean
+  Taxonomy?: string
+  Concept?: string
+  Label?: string
+  Form?: string
+  FilingDate?: string
+  Accession?: string
+  PeriodEnd?: string
+  Formula?: string
+  Calculation?: string
+  DocumentURL?: string
+}
+
+export interface DiffWord {
+  type: 'equal' | 'insert' | 'delete'
+  text: string
+}
+
+export interface DiffParagraph {
+  type: 'equal' | 'added' | 'deleted' | 'modified'
+  text: string
+  prior_text?: string
+  current_text?: string
+  words?: DiffWord[]
+  heading?: string
+}
+
+export interface DiffStats {
+  total_current: number
+  total_prior: number
+  added_paragraphs: number
+  deleted_paragraphs: number
+  modified_paragraphs: number
+  unchanged_paragraphs: number
+  similarity_pct: number
+}
+
+export interface FilingVersion {
+  accession: string
+  filing_date: string
+  report_date: string
+  form: string
+  primary_document: string
+  year?: string
+}
+
+export interface FilingDiffResult {
+  ticker: string
+  item: '1A' | '7'
+  item_title: string
+  current_filing: FilingVersion
+  prior_filing: FilingVersion
+  available_10k_filings: FilingVersion[]
+  stats: DiffStats
+  diff_items: DiffParagraph[]
 }
 
 export interface SummaryMetric {
@@ -38,6 +92,7 @@ export interface IntangiblesResult {
 
 export interface QuarterlyInflection {
   metric: string
+  period_label?: string
   latest_value: number
   prior_quarter_value: number
   prior_year_quarter_value: number
@@ -273,6 +328,8 @@ export interface ModernGAAPCandidate {
 export interface QuoteResponse {
   ticker: string
   price: number
+  high_52?: number
+  low_52?: number
   currency: string
   as_of: string
 }

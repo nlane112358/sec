@@ -55,6 +55,16 @@ export function formatShares(value: number | undefined | null): string {
   return `${value.toLocaleString('en-US')} shares`
 }
 
+export function formatNumber(value: number | undefined | null, decimals = 2): string {
+  if (value === undefined || value === null || isNaN(value)) {
+    return '—'
+  }
+  return value.toLocaleString('en-US', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: decimals,
+  })
+}
+
 export function formatDate(dateStr: string): string {
   if (!dateStr) return '—'
   try {

@@ -1,7 +1,8 @@
 import React from 'react'
-import { Command, Sun, Moon, Database, HelpCircle, Star, Sparkles, Search } from 'lucide-react'
+import { ArrowLeftRight, Command, Sun, Moon, Database, HelpCircle, Star, Sparkles, Search, Camera } from 'lucide-react'
 import { DatabaseStats } from '../types'
 import { RainbowMode } from './RainbowBackground'
+import { prefetchOnHover } from '../lib/cache'
 
 interface NavbarProps {
   stats: DatabaseStats | null
@@ -11,6 +12,9 @@ interface NavbarProps {
   onSelectTicker?: (ticker: string) => void
   onOpenCmdk: () => void
   onOpenShortcuts: () => void
+  onOpenTearSheet?: () => void
+  splitView?: boolean
+  onToggleSplitView?: () => void
   darkMode: boolean
   onToggleTheme: () => void
   rainbowMode: RainbowMode
@@ -25,11 +29,36 @@ export const Navbar: React.FC<NavbarProps> = ({
   onSelectTicker,
   onOpenCmdk,
   onOpenShortcuts,
+  onOpenTearSheet,
+  splitView = false,
+  onToggleSplitView,
   darkMode,
   onToggleTheme,
   rainbowMode,
   onCycleRainbowMode,
 }) => {
+  // Visual pulse highlight when numbers automatically update
+  const [statsUpdated, setStatsUpdated] = React.useState(false)
+  const prevStatsRef = React.useRef<{ companies: number; facts: number } | null>(null)
+
+  React.useEffect(() => {
+    if (!stats) return
+    if (prevStatsRef.current) {
+      if (
+        prevStatsRef.current.companies !== stats.total_companies ||
+        prevStatsRef.current.facts !== stats.total_facts
+      ) {
+        setStatsUpdated(true)
+        const timer = setTimeout(() => setStatsUpdated(false), 2000)
+        return () => clearTimeout(timer)
+      }
+    }
+    prevStatsRef.current = {
+      companies: stats.total_companies,
+      facts: stats.total_facts,
+    }
+  }, [stats?.total_companies, stats?.total_facts])
+
   return (
     <header className="sticky top-0 z-40 w-full border-b border-neutral-200/80 dark:border-white/10 bg-white/75 dark:bg-[#030611]/60 backdrop-blur-xl transition-colors duration-150">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 h-13 flex items-center justify-between text-xs">
@@ -42,11 +71,26 @@ export const Navbar: React.FC<NavbarProps> = ({
             </span>
           </div>
 
-          <div className="hidden lg:flex items-center gap-2 text-neutral-500 font-mono text-[11px] pl-3 border-l border-neutral-200 dark:border-neutral-800">
-            <Database className="w-3 h-3 text-neutral-400" />
-            <span>
+          <div
+            className="hidden lg:flex items-center gap-2 text-neutral-500 font-mono text-[11px] pl-3 border-l border-neutral-200 dark:border-neutral-800"
+            title="Live SQLite database statistics: automatically updates in real time as facts and filings are synced"
+          >
+            <div className="relative flex items-center justify-center">
+              <Database className="w-3 h-3 text-neutral-400" />
+              <span className="absolute -top-0.5 -right-0.5 flex h-1.5 w-1.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500" />
+              </span>
+            </div>
+            <span
+              className={`transition-colors duration-500 ${
+                statsUpdated
+                  ? 'text-emerald-600 dark:text-emerald-400 font-semibold'
+                  : ''
+              }`}
+            >
               {stats
-                ? `${stats.total_companies} companies • ${(stats.total_facts / 1e6).toFixed(1)}M facts`
+                ? `${stats.total_companies.toLocaleString()} companies • ${(stats.total_facts / 1e6).toFixed(1)}M facts`
                 : 'connecting...'}
             </span>
           </div>
@@ -59,6 +103,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <button
                   key={t}
                   onClick={() => onSelectTicker(t)}
+                  {...prefetchOnHover(t)}
                   className={`px-1.5 py-0.5 transition-colors ${
                     t === currentTicker
                       ? 'bg-neutral-900 text-white dark:bg-white dark:text-black font-semibold'
@@ -80,7 +125,9 @@ export const Navbar: React.FC<NavbarProps> = ({
         >
           <div className="flex items-center gap-2 truncate">
             <Search className="w-3.5 h-3.5 text-neutral-400 group-hover:text-neutral-700 dark:group-hover:text-neutral-200 shrink-0" />
-            <span className="truncate">Search 528 companies or type /...</span>
+            <span className="truncate">
+              Search {stats ? `${stats.total_companies.toLocaleString()} companies` : 'companies'} or type /...
+            </span>
           </div>
           <kbd className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] text-neutral-500 dark:text-neutral-400 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded font-mono shrink-0">
             <Command className="w-2.5 h-2.5" />
@@ -90,6 +137,31 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Right Actions */}
         <div className="flex items-center gap-2 text-neutral-500">
+          {onToggleSplitView && (
+            <button
+              onClick={onToggleSplitView}
+              aria-pressed={splitView}
+              className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1.5 transition-colors ${
+                splitView
+                  ? 'border-indigo-500/30 bg-indigo-500/10 text-indigo-600 dark:text-indigo-300'
+                  : 'border-transparent hover:border-neutral-200 hover:bg-neutral-100 hover:text-neutral-900 dark:hover:border-white/10 dark:hover:bg-neutral-900 dark:hover:text-white'
+              }`}
+              title={`${splitView ? 'Exit' : 'Open'} split view (⌘ + \\)`}
+            >
+              <ArrowLeftRight className="h-4 w-4" />
+              <span className="hidden xl:inline text-[10px] font-mono">Split</span>
+            </button>
+          )}
+          {onOpenTearSheet && (
+            <button
+              onClick={onOpenTearSheet}
+              className="p-1.5 rounded-md hover:text-neutral-900 dark:hover:text-neutral-100 hover:bg-neutral-100 dark:hover:bg-neutral-900 transition-colors"
+              title="Export Tear Sheet Card PNG (⌘+Shift+S)"
+            >
+              <Camera className="w-4 h-4" />
+            </button>
+          )}
+
           <button
             onClick={onOpenShortcuts}
             className="p-1.5 rounded-md hover:text-neutral-900 dark:hover:text-neutral-100 hover:bg-neutral-100 dark:hover:bg-neutral-900 transition-colors"

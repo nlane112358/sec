@@ -24,12 +24,18 @@ Start the interactive web application inspired by the minimalist, editorial craf
 
 Access the frontend at `http://localhost:8080`.
 - **Command Menu (`cmdk`)**: Press `⌘K` or `/` for instant fuzzy search across 528 companies, quick tab switching, and actions.
+- **Signature Micro-Interactions & "Paco Coursey" Craft**:
+  - **Zero-Latency Optimistic Prefetching**: 80ms hover intent listener across the Watchlist, Navbar, UniverseScreener rows, and Peer tables fires background prefetching into `summaryCache` and `quoteCache`, enabling clicking tickers to transition in 0ms with zero loading spinner.
+  - **Synchronized Crosshair Scrubbing on Sparklines & Charts**: Bidirectional crosshairs link all inline sparklines in `FinancialStatement.tsx`, statement table columns, and all visual charts in `FinancialCharts.tsx`—hovering or scrubbing FY 2023 in any chart, table column, or sparkline highlights FY 2023 across the entire page simultaneously.
+  - **One-Click "Tear Sheet" Card Export (`⌘ + Shift + S`)**: Instantly generates a clean, high-resolution (2x Retina, 2400×1500), dark-mode PNG summary card featuring Company Header, Key Valuation Multiples, Peters & Taylor Economic ROIC, DCF Football Field, and 5-Year Sparklines, copying directly to the clipboard ready to paste into X/Twitter, Substack, or Slack.
 - **5-Year Statements & Micro-Sparklines**: Clean tabular statements with inline 5-year SVG sparklines, SBC highlights, Peters & Taylor adjustments, CSV/JSON export, and 1-click Markdown Executive Investment Memo generation.
 - **Interactive Forward & Reverse DCF**: Dynamic sliders for Growth, WACC/Discount, and Terminal Growth with real-time per-share intrinsic valuation, EV-to-equity bridge, 3x3 sensitivity matrix, shareable model URLs, and a **Reverse DCF (Expectations Arbitrage)** solver finding market-implied growth and alpha spread.
 - **Intangible Capitalization & Waterfall**: Modern GAAP arbitrage breakdown (5-year linear R&D amortization, 30% SG&A brand capital over 3 years) with visual step-by-step Capitalization Waterfall bridge.
 - **Buffett Compounder Screener**: Multi-factor institutional ranking across 528 companies with 0–100 quality scores, Intangible-adjusted ROIC, FCF conversion, 5Y revenue CAGR, and share cannibalism/buyback filters.
 - **Side-by-Side Peer Benchmarking**: Direct competitor matrix comparing ROIC, margins, growth, and quality scores with 1-click navigation.
 - **Watchlists & Recents**: Quick star watchlists and recent history tray in navigation for rapid switching.
+- **True "Click-to-Verify" SEC Filing Traceability**: Clicking any cell across Annual, Quarterly, or TTM Financial Statements opens a split-screen drawer displaying the exact XBRL concept provenance (`us-gaap:ResearchAndDevelopmentExpense`), SEC Form 10-K filing date, accession number, 1-click `=SEC("AAPL", "Revenue", 2025)` copy button, and the live official SEC filing HTML anchored and highlighted directly at the table line item.
+- **10-K Redline & Diff Analyzer**: Institutional comparison engine comparing Item 1A (Risk Factors) or Item 7 (MD&A) between any two 10-Ks, highlighting added paragraphs in green and deleted paragraphs in red with word-level precision, similarity scores, and 1-click executive diff report export.
 - **SEC Filings Browser**: Complete filing history with direct links to SEC EDGAR documents.
 - **Keyboard-driven navigation**: `[` / `]` to cycle companies, `1`-`6` to switch views, `t` to toggle dark/light theme, `?` for shortcuts.
 
@@ -38,28 +44,122 @@ For local frontend development with instant Hot Module Replacement:
 cd web && npm run dev
 ```
 
-### Sync Universe
+### Universe Breadth & Ingestion (`universe` & `sync`)
 
-Download `us-gaap`, `ifrs-full`, and `dei` facts plus complete filing histories (including amendments) into `data/sec.db`:
+Download primary `us-gaap`, `ifrs-full`, and `dei` XBRL facts plus complete filing histories into `data/sec.db`. Beyond the standard mega-cap S&P 500, fundamental stock pickers generate the highest alpha in small-caps, undercovered mid-caps, and international compounders.
 
+The repository includes built-in universe rosters under `universes/`:
+- `russell2000.txt` (2,000 tickers): US small-caps where informational inefficiency and alpha are highest.
+- `midcap400.txt` (400 tickers): S&P MidCap 400 compounders with proven operating models and room to grow.
+- `adr_foreign.txt` (251 tickers): Global cross-border compounders filing Form 20-F / 40-F (TSMC, ASML, Novo Nordisk, AstraZeneca, Toyota, etc.).
+- `broad_market_3000.txt` / `russell3000.txt` (3,000+ tickers): Broad market investable US universe.
+- `sp500.txt` (500 tickers) & `nasdaq100.txt` (100 tickers): Large-cap US benchmarks.
+
+Inspect coverage and sync status across all universes:
 ```sh
-./sec sync AAPL MSFT GOOGL AMZN NVDA META
-./sec sync --universe sp500.txt --workers 4
-./sec sync --universe all-tickers.txt --workers 4
+./sec universe
 ```
 
-`sync` runs up to 4 concurrent workers (`--workers 1` for sequential execution) sharing an SEC-compliant rate limiter.
+Sync any individual ticker or universe file with automatic rate-limiting compliance (8.5 req/sec SEC EDGAR threshold):
+```sh
+# Sync specific tickers
+./sec sync AAPL MSFT TSM ASML POWL
 
-### Financial Summary
+# Sync universes with --skip-existing to instantly skip already downloaded tickers
+./sec sync --universe russell2000 --workers 4 --skip-existing
+./sec sync --universe midcap400 --workers 4 --skip-existing
+./sec sync --universe adr_foreign --workers 4 --skip-existing
+./sec sync --universe broad_market_3000 --workers 4 --skip-existing
+```
 
-Display 3 to 5 years of annual metrics:
+`sync` runs up to 4 concurrent workers (`--workers 1` for sequential execution) sharing an SEC-compliant token bucket rate limiter.
+
+### Financial Summary, Quarterly (10-Q) & TTM Data (`summary`)
+
+Display multi-year annual, discrete quarterly (10-Q), or Trailing-Twelve-Month (TTM) fundamental facts with quarterly earnings acceleration tracking:
 
 ```sh
+# Annual 5-year multi-period view
 ./sec summary AAPL
 ./sec summary AAPL --years 3
+
+# Discrete quarterly view (10-Q) with Peters & Taylor adjustments
+./sec summary AAPL --quarterly
+./sec summary AAPL -q --quarters 8
+
+# Trailing-Twelve-Month (TTM) run-rate + Quarterly Inflection Points
+./sec summary AAPL --ttm
+./sec summary MSFT --ttm
+./sec summary POWL --ttm
 ```
 
-Reports revenue, operating income, SG&A, R&D, intangible amortization, intangible-adjusted operating income, net income, operating cash flow (OCF), CapEx, D&A, free cash flow (`OCF - CapEx`), stock-based compensation (SBC), an SBC-adjusted FCF proxy, cash, borrowings, stockholders' equity, intangible capital, adjusted invested capital, intangible-adjusted ROIC, and share counts (period-end outstanding when available, otherwise diluted weighted-average).
+- **Quarterly 10-Q Extraction & Mathematical Reconstruction**:
+  - Automatically isolates discrete 3-month quarterly facts from SEC EDGAR filings.
+  - For filers reporting cumulative year-to-date (YTD) cash flows (6M and 9M) and 10-K full-year (12M), discrete fourth-quarter (Q4) flows are reconstructed with 100% mathematical accuracy ($\text{Q4} = \text{Annual 12M} - \text{Q3 YTD 9M}$).
+- **Quarterly Inflections & Earnings Acceleration Table**:
+  - Renders a real-time earnings surprise matrix tracking YoY growth ($Q_0 \text{ vs } Q_4$), Prior YoY growth ($Q_1 \text{ vs } Q_5$), and QoQ momentum ($Q_0 \text{ vs } Q_1$).
+  - Automatically flags **ACCELERATING ▲** (positive growth expanding vs prior year) or **decelerating ▼** across Revenue, Operating Income, Net Income, Operating Cash Flow, and Free Cash Flow.
+- **Reported & Derived Fundamentals**:
+  - Revenue, operating income, SG&A, R&D, intangible amortization, intangible-adjusted operating income, net income, operating cash flow (OCF), CapEx, D&A, free cash flow (`OCF - CapEx`), stock-based compensation (SBC), an SBC-adjusted FCF proxy, cash, borrowings, stockholders' equity, intangible capital, adjusted invested capital, intangible-adjusted ROIC, and share counts.
+
+### Excel & Google Sheets Integration (`=SEC(...)`)
+
+Institutional retention requires zero-friction integration into financial modeling workflows. The built-in web server exposes clean REST endpoints and drop-in formula connectors for **Google Sheets** and **Microsoft Excel**.
+
+Start the server:
+```sh
+./sec serve --port 8080
+```
+
+#### 1. Google Sheets (`SEC.gs`)
+1. In any Google Sheet, navigate to **Extensions** ➔ **Apps Script**.
+2. Copy the contents of [`integrations/sheets/SEC.gs`](integrations/sheets/SEC.gs) (or click **Excel / Sheets** in the web UI at `http://localhost:8080` to copy).
+3. Save and return to your sheet. Full autocomplete and documentation appear automatically:
+
+```excel
+=SEC("MSFT", "ADJ_ROIC")
+=SEC("AAPL", "REVENUE", "TTM")
+=SEC("NVDA", "FCF", "2024")
+=SEC_MATRIX(A2:A20, B1:F1, "TTM")
+```
+
+#### 2. Microsoft Excel: Modern Zero-Install (`WEBSERVICE` / `LAMBDA`)
+Modern Excel (Microsoft 365, Excel 2013+) natively supports REST lookups without macros or add-ins:
+
+```excel
+=NUMBERVALUE(WEBSERVICE("http://localhost:8080/api/sec/MSFT/ADJ_ROIC?raw=1"))
+```
+
+To enable the clean `=SEC("MSFT", "ADJ_ROIC")` syntax in Excel:
+1. Open **Formulas** ➔ **Name Manager** ➔ **New**.
+2. Set **Name**: `SEC`.
+3. Set **Refers to**:
+```excel
+=LAMBDA(ticker,metric,NUMBERVALUE(WEBSERVICE("http://localhost:8080/api/sec/" & ticker & "/" & metric & "?raw=1")))
+```
+
+#### 3. Microsoft Excel: Drop-In VBA Module (`SEC.bas`)
+For offline or legacy Excel workbooks:
+1. In Excel, press `Alt+F11` (`Option+F11` on Mac) to open the VBA Editor.
+2. Select **File** ➔ **Import File...** and choose [`integrations/excel/SEC.bas`](integrations/excel/SEC.bas).
+3. Use `=SEC("AAPL", "FCF")` and `=SEC_MATRIX(A2:A10, B1:E1)` directly in any cell.
+
+#### Supported Metric Aliases
+| Metric Key | Description | Output Example |
+| :--- | :--- | :--- |
+| `ADJ_ROIC` / `ROIC` | Peters & Taylor Intangible-Adjusted ROIC | `0.232` (raw) / `23.2%` |
+| `REVENUE` / `SALES` | Total Revenue / Top-Line | `346440000000` / `$346.44B` |
+| `OPERATING_INCOME` / `EBIT` | GAAP Operating Income | `163190000000` / `$163.19B` |
+| `ADJ_EBIT` | Intangible-Adjusted Operating Income | `173660000000` / `$173.66B` |
+| `NET_INCOME` | Net Income Attributable to Shareholders | `142630000000` / `$142.63B` |
+| `OCF` | Net Cash from Operating Activities | `195880000000` / `$195.88B` |
+| `CAPEX` | Capital Expenditures | `135920000000` / `$135.92B` |
+| `FCF` / `FREE_CASH_FLOW` | Free Cash Flow (`OCF - CapEx`) | `59960000000` / `$59.96B` |
+| `SBC` | Stock-Based Compensation Expense | `1256000000` / `$12.56B` |
+| `OWNER_EARNINGS` / `SBC_FCF`| SBC-Adjusted FCF Proxy (`FCF - SBC`) | `47400000000` / `$47.40B` |
+| `CASH` / `DEBT` | Cash & Equivalents / Total Borrowings | Balance sheet items |
+| `ADJ_INVESTED_CAPITAL` | Intangible-Adjusted Invested Capital | Balance sheet items |
+| `SHARES` | Period-End Shares Outstanding | `7430000000` / `7.43B shares` |
 
 ### Discounted Cash Flow (`dcf`)
 

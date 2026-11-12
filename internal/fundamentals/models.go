@@ -22,9 +22,19 @@ type SummaryMetric struct {
 }
 
 type SummaryValue struct {
-	Value   float64 `json:"Value"`
-	Unit    string  `json:"Unit"`
-	Present bool    `json:"Present"`
+	Value       float64 `json:"Value"`
+	Unit        string  `json:"Unit"`
+	Present     bool    `json:"Present"`
+	Taxonomy    string  `json:"Taxonomy,omitempty"`
+	Concept     string  `json:"Concept,omitempty"`
+	Label       string  `json:"Label,omitempty"`
+	Form        string  `json:"Form,omitempty"`
+	FilingDate  string  `json:"FilingDate,omitempty"`
+	Accession   string  `json:"Accession,omitempty"`
+	PeriodEnd   string  `json:"PeriodEnd,omitempty"`
+	Formula     string  `json:"Formula,omitempty"`
+	Calculation string  `json:"Calculation,omitempty"`
+	DocumentURL string  `json:"DocumentURL,omitempty"`
 }
 
 type IntangiblesResult struct {
@@ -40,6 +50,7 @@ type IntangiblesResult struct {
 
 type QuarterlyInflection struct {
 	Metric                string  `json:"metric"`
+	PeriodLabel           string  `json:"period_label,omitempty"`
 	LatestValue           float64 `json:"latest_value"`
 	PriorQuarterValue     float64 `json:"prior_quarter_value"`
 	PriorYearQuarterValue float64 `json:"prior_year_quarter_value"`

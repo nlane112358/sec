@@ -2,6 +2,8 @@ import React, { useState, useEffect, useMemo } from 'react'
 import { GitCompare, X, ArrowRight, Plus } from 'lucide-react'
 import { Company, RankedCompany, RankResult } from '../types'
 import { formatPercent, formatCurrency } from '../lib/format'
+import { prefetchOnHover } from '../lib/cache'
+import { CustomRatioBuilder } from './CustomRatioBuilder'
 
 interface PeerComparisonProps {
   currentTicker: string
@@ -189,6 +191,12 @@ export const PeerComparison: React.FC<PeerComparisonProps> = ({
         </div>
       )}
 
+      <CustomRatioBuilder
+        currentTicker={currentTicker}
+        companies={companies}
+        tickers={peerTickers}
+      />
+
       {/* Side-by-Side Comparison Matrix */}
       <div className="border border-neutral-200/80 dark:border-white/10 bg-white/70 dark:bg-[#030611]/60 backdrop-blur-md overflow-hidden">
         <div className="overflow-x-auto">
@@ -212,6 +220,7 @@ export const PeerComparison: React.FC<PeerComparisonProps> = ({
                       <div className="flex flex-col items-end">
                         <button
                           onClick={() => onSelectTicker(p.ticker)}
+                          {...prefetchOnHover(p.ticker)}
                           className="hover:underline flex items-center gap-1 text-xs font-mono font-bold"
                         >
                           <span>{p.ticker}</span>

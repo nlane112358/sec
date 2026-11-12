@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { BarChart3, TrendingUp, PieChart, Layers, ArrowUpRight } from 'lucide-react'
 import { SummaryResponse, SummaryValue } from '../types'
 import { formatCurrency, formatPercent } from '../lib/format'
@@ -6,20 +6,61 @@ import { formatCurrency, formatPercent } from '../lib/format'
 interface FinancialChartsProps {
   summary: SummaryResponse
   compact: boolean
+  hoveredYear?: number | null
+  onHoverYear?: (year: number | null) => void
 }
 
 type ChartTab = 'trends' | 'margins' | 'capital_allocation' | 'capital_structure'
 
-export const FinancialCharts: React.FC<FinancialChartsProps> = ({ summary, compact }) => {
+export const FinancialCharts: React.FC<FinancialChartsProps> = ({
+  summary,
+  compact,
+  hoveredYear,
+  onHoverYear,
+}) => {
   const [activeTab, setActiveTab] = useState<ChartTab>('trends')
-  const [hoveredYearIndex, setHoveredYearIndex] = useState<number | null>(null)
+  const [internalHoveredYearIndex, setInternalHoveredYearIndex] = useState<number | null>(null)
+  const [chartWidth, setChartWidth] = useState(720)
+  const chartContainerRef = useRef<HTMLDivElement | null>(null)
 
   const periods = summary.periods || []
+
+  useEffect(() => {
+    const container = chartContainerRef.current
+    if (!container) return
+
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width
+      if (width && Number.isFinite(width)) {
+        setChartWidth(Math.max(320, Math.round(width)))
+      }
+    })
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [activeTab, periods.length])
+
   if (periods.length === 0) return null
 
   // Chronological order (oldest to newest for charts: index 4, 3, 2, 1, 0)
   const chronoPeriods = [...periods].reverse()
   const n = periods.length
+
+  const syncIndex =
+    hoveredYear !== undefined && hoveredYear !== null
+      ? chronoPeriods.findIndex((p) => Number(p.Year) === hoveredYear)
+      : -1
+  const hoveredYearIndex = syncIndex >= 0 ? syncIndex : internalHoveredYearIndex
+
+  const handleHoverYear = (idx: number) => {
+    setInternalHoveredYearIndex(idx)
+    const yr = Number(chronoPeriods[idx]?.Year)
+    if (yr) onHoverYear?.(yr)
+  }
+
+  const handleLeaveYear = () => {
+    setInternalHoveredYearIndex(null)
+    onHoverYear?.(null)
+  }
 
   const getChronologicalValues = (metricName: string): (number | null)[] => {
     const m = summary.metrics.find((x) => x.Name === metricName)
@@ -60,7 +101,6 @@ export const FinancialCharts: React.FC<FinancialChartsProps> = ({ summary, compa
   })
 
   // Chart dimensions for SVG
-  const chartWidth = 720
   const chartHeight = 220
   const padding = { top: 20, right: 30, bottom: 35, left: 60 }
   const innerWidth = chartWidth - padding.left - padding.right
@@ -151,7 +191,7 @@ export const FinancialCharts: React.FC<FinancialChartsProps> = ({ summary, compa
                 )}
               </div>
 
-              <div className="w-full overflow-x-auto">
+              <div ref={chartContainerRef} className="w-full overflow-x-auto">
                 <svg
                   viewBox={`0 0 ${chartWidth} ${chartHeight}`}
                   className="w-full h-48 sm:h-56 select-none"
@@ -203,18 +243,30 @@ export const FinancialCharts: React.FC<FinancialChartsProps> = ({ summary, compa
                       <g
                         key={p.Year}
                         className="cursor-pointer transition-opacity"
-                        onMouseEnter={() => setHoveredYearIndex(idx)}
-                        onMouseLeave={() => setHoveredYearIndex(null)}
+                        onMouseEnter={() => handleHoverYear(idx)}
+                        onMouseLeave={handleLeaveYear}
                       >
                         {/* Background hover highlight */}
                         {isHovered && (
-                          <rect
-                            x={padding.left + colWidth * idx}
-                            y={padding.top}
-                            width={colWidth}
-                            height={innerHeight}
-                            className="fill-neutral-500/5 dark:fill-neutral-400/5"
-                          />
+                          <>
+                            <rect
+                              x={padding.left + colWidth * idx}
+                              y={padding.top}
+                              width={colWidth}
+                              height={innerHeight}
+                              className="fill-indigo-500/10 dark:fill-indigo-500/15"
+                            />
+                            <line
+                              x1={centerX}
+                              y1={padding.top}
+                              x2={centerX}
+                              y2={chartHeight - padding.bottom}
+                              stroke="#6366f1"
+                              strokeDasharray="2,2"
+                              strokeWidth="1.2"
+                              className="opacity-75"
+                            />
+                          </>
                         )}
 
                         {/* Revenue Bar */}
@@ -322,7 +374,7 @@ export const FinancialCharts: React.FC<FinancialChartsProps> = ({ summary, compa
                 )}
               </div>
 
-              <div className="w-full overflow-x-auto">
+              <div ref={chartContainerRef} className="w-full overflow-x-auto">
                 <svg
                   viewBox={`0 0 ${chartWidth} ${chartHeight}`}
                   className="w-full h-48 sm:h-56 select-none"
@@ -395,8 +447,8 @@ export const FinancialCharts: React.FC<FinancialChartsProps> = ({ summary, compa
                       <g
                         key={p.Year}
                         className="cursor-pointer"
-                        onMouseEnter={() => setHoveredYearIndex(idx)}
-                        onMouseLeave={() => setHoveredYearIndex(null)}
+                        onMouseEnter={() => handleHoverYear(idx)}
+                        onMouseLeave={handleLeaveYear}
                       >
                         {isHovered && (
                           <line
@@ -404,9 +456,9 @@ export const FinancialCharts: React.FC<FinancialChartsProps> = ({ summary, compa
                             y1={padding.top}
                             x2={x}
                             y2={chartHeight - padding.bottom}
-                            stroke="currentColor"
-                            className="text-neutral-400 dark:text-neutral-600"
+                            stroke="#6366f1"
                             strokeDasharray="2,2"
+                            strokeWidth="1.2"
                           />
                         )}
 
@@ -504,7 +556,7 @@ export const FinancialCharts: React.FC<FinancialChartsProps> = ({ summary, compa
                 )}
               </div>
 
-              <div className="w-full overflow-x-auto">
+              <div ref={chartContainerRef} className="w-full overflow-x-auto">
                 <svg
                   viewBox={`0 0 ${chartWidth} ${chartHeight}`}
                   className="w-full h-48 sm:h-56 select-none"
@@ -557,17 +609,29 @@ export const FinancialCharts: React.FC<FinancialChartsProps> = ({ summary, compa
                       <g
                         key={p.Year}
                         className="cursor-pointer"
-                        onMouseEnter={() => setHoveredYearIndex(idx)}
-                        onMouseLeave={() => setHoveredYearIndex(null)}
+                        onMouseEnter={() => handleHoverYear(idx)}
+                        onMouseLeave={handleLeaveYear}
                       >
                         {isHovered && (
-                          <rect
-                            x={padding.left + colWidth * idx}
-                            y={padding.top}
-                            width={colWidth}
-                            height={innerHeight}
-                            className="fill-neutral-500/5 dark:fill-neutral-400/5"
-                          />
+                          <>
+                            <rect
+                              x={padding.left + colWidth * idx}
+                              y={padding.top}
+                              width={colWidth}
+                              height={innerHeight}
+                              className="fill-indigo-500/10 dark:fill-indigo-500/15"
+                            />
+                            <line
+                              x1={centerX}
+                              y1={padding.top}
+                              x2={centerX}
+                              y2={chartHeight - padding.bottom}
+                              stroke="#6366f1"
+                              strokeDasharray="2,2"
+                              strokeWidth="1.2"
+                              className="opacity-75"
+                            />
+                          </>
                         )}
 
                         {/* CapEx (Bottom Segment) */}
@@ -659,7 +723,7 @@ export const FinancialCharts: React.FC<FinancialChartsProps> = ({ summary, compa
                 )}
               </div>
 
-              <div className="w-full overflow-x-auto">
+              <div ref={chartContainerRef} className="w-full overflow-x-auto">
                 <svg
                   viewBox={`0 0 ${chartWidth} ${chartHeight}`}
                   className="w-full h-48 sm:h-56 select-none"
@@ -710,17 +774,29 @@ export const FinancialCharts: React.FC<FinancialChartsProps> = ({ summary, compa
                       <g
                         key={p.Year}
                         className="cursor-pointer"
-                        onMouseEnter={() => setHoveredYearIndex(idx)}
-                        onMouseLeave={() => setHoveredYearIndex(null)}
+                        onMouseEnter={() => handleHoverYear(idx)}
+                        onMouseLeave={handleLeaveYear}
                       >
                         {isHovered && (
-                          <rect
-                            x={padding.left + colWidth * idx}
-                            y={padding.top}
-                            width={colWidth}
-                            height={innerHeight}
-                            className="fill-neutral-500/5 dark:fill-neutral-400/5"
-                          />
+                          <>
+                            <rect
+                              x={padding.left + colWidth * idx}
+                              y={padding.top}
+                              width={colWidth}
+                              height={innerHeight}
+                              className="fill-indigo-500/10 dark:fill-indigo-500/15"
+                            />
+                            <line
+                              x1={centerX}
+                              y1={padding.top}
+                              x2={centerX}
+                              y2={chartHeight - padding.bottom}
+                              stroke="#6366f1"
+                              strokeDasharray="2,2"
+                              strokeWidth="1.2"
+                              className="opacity-75"
+                            />
+                          </>
                         )}
 
                         {/* Cash Bar */}

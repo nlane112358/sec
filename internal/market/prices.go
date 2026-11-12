@@ -313,23 +313,54 @@ func yahooSymbolForTicker(ticker string) string {
 	return strings.ReplaceAll(ticker, ".", "-")
 }
 
+// LiveQuote holds the live share price along with 52-week trading bounds.
+type LiveQuote struct {
+	Price  float64
+	High52 float64
+	Low52  float64
+}
+
+// FetchLiveQuote fetches the live price and 52-week trading bounds for a ticker.
+func FetchLiveQuote(ctx context.Context, ticker string) (LiveQuote, error) {
+	ticker = strings.ToUpper(strings.TrimSpace(ticker))
+	if ticker == "" {
+		return LiveQuote{}, fmt.Errorf("empty ticker")
+	}
+	httpClient := &http.Client{Timeout: 6 * time.Second}
+	if quote, err := fetchYahooChartQuote(ctx, httpClient, ticker); err == nil && quote.Price > 0 {
+		return quote, nil
+	}
+	if price, err := fetchStooqPrice(ctx, httpClient, ticker); err == nil && price > 0 {
+		return LiveQuote{Price: price}, nil
+	}
+	return LiveQuote{}, fmt.Errorf("unable to fetch live quote for %s", ticker)
+}
+
 func fetchYahooChartPrice(ctx context.Context, client *http.Client, ticker string) (float64, error) {
+	q, err := fetchYahooChartQuote(ctx, client, ticker)
+	if err != nil {
+		return 0, err
+	}
+	return q.Price, nil
+}
+
+func fetchYahooChartQuote(ctx context.Context, client *http.Client, ticker string) (LiveQuote, error) {
 	yahooSymbol := yahooSymbolForTicker(ticker)
 	endpoint := fmt.Sprintf("https://query1.finance.yahoo.com/v8/finance/chart/%s?interval=1d&range=5d", url.PathEscape(yahooSymbol))
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return 0, err
+		return LiveQuote{}, err
 	}
 	request.Header.Set("User-Agent", browserUserAgent)
 	request.Header.Set("Accept", "application/json")
 	response, err := client.Do(request)
 	if err != nil {
-		return 0, err
+		return LiveQuote{}, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
-		return 0, fmt.Errorf("yahoo HTTP %d", response.StatusCode)
+		return LiveQuote{}, fmt.Errorf("yahoo HTTP %d", response.StatusCode)
 	}
 	var payload struct {
 		Chart struct {
@@ -338,28 +369,38 @@ func fetchYahooChartPrice(ctx context.Context, client *http.Client, ticker strin
 					Currency           string  `json:"currency"`
 					RegularMarketPrice float64 `json:"regularMarketPrice"`
 					PreviousClose      float64 `json:"previousClose"`
+					FiftyTwoWeekHigh   float64 `json:"fiftyTwoWeekHigh"`
+					FiftyTwoWeekLow    float64 `json:"fiftyTwoWeekLow"`
 				} `json:"meta"`
 			} `json:"result"`
 		} `json:"chart"`
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&payload); err != nil {
-		return 0, err
+		return LiveQuote{}, err
 	}
 	if len(payload.Chart.Result) == 0 {
-		return 0, fmt.Errorf("empty chart result for %s", ticker)
+		return LiveQuote{}, fmt.Errorf("empty chart result for %s", ticker)
 	}
 	meta := payload.Chart.Result[0].Meta
 	price := meta.RegularMarketPrice
 	if price <= 0 || !finite(price) {
 		price = meta.PreviousClose
 	}
+	high52 := meta.FiftyTwoWeekHigh
+	low52 := meta.FiftyTwoWeekLow
 	if price > 0 && finite(price) {
 		if strings.EqualFold(meta.Currency, "GBp") {
 			price = price / 100.0
+			high52 = high52 / 100.0
+			low52 = low52 / 100.0
 		}
-		return price, nil
+		return LiveQuote{
+			Price:  price,
+			High52: high52,
+			Low52:  low52,
+		}, nil
 	}
-	return 0, fmt.Errorf("no positive price in yahoo response for %s", ticker)
+	return LiveQuote{}, fmt.Errorf("no positive price in yahoo response for %s", ticker)
 }
 
 func fetchStooqPrice(ctx context.Context, client *http.Client, ticker string) (float64, error) {

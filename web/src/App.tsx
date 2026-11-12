@@ -1,7 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { Navbar } from './components/Navbar'
 import { CommandMenu } from './components/CommandMenu'
 import { CompanyHeader } from './components/CompanyHeader'
+import { ForensicBriefing } from './components/ForensicBriefing'
+import { SplitWorkspace } from './components/SplitWorkspace'
 import { Tabs, TabKey } from './components/Tabs'
 import { FinancialStatement } from './components/FinancialStatement'
 import { DCFModeler } from './components/DCFModeler'
@@ -10,8 +12,12 @@ import { FilingsBrowser } from './components/FilingsBrowser'
 import { UniverseScreener } from './components/UniverseScreener'
 import { PeerComparison } from './components/PeerComparison'
 import { ShortcutsModal } from './components/ShortcutsModal'
+import { TearSheetModal } from './components/TearSheetModal'
 import { RainbowBackground, RainbowMode } from './components/RainbowBackground'
-import { Company, SummaryResponse, DatabaseStats } from './types'
+import { Company, SummaryResponse, DatabaseStats, QuoteResponse } from './types'
+import { summaryCache, quoteCache, prefetchQuote } from './lib/cache'
+import { renderTearSheetToBlob } from './lib/tearSheetCanvas'
+import { X } from 'lucide-react'
 
 const VALID_TABS: TabKey[] = ['statements', 'dcf', 'intangibles', 'filings', 'screener', 'compare']
 
@@ -42,9 +48,6 @@ const parseHashRoute = (): { ticker: string; tab: TabKey } => {
   return { ticker, tab }
 }
 
-// In-memory LRU cache for 0ms transitions
-const summaryCache = new Map<string, SummaryResponse>()
-
 export const App: React.FC = () => {
   const [stats, setStats] = useState<DatabaseStats | null>(null)
   const [companies, setCompanies] = useState<Company[]>([])
@@ -53,14 +56,33 @@ export const App: React.FC = () => {
   const [currentTicker, setCurrentTicker] = useState<string>(initialRoute.ticker)
   const [activeTab, setActiveTab] = useState<TabKey>(initialRoute.tab)
   const [cadence, setCadence] = useState<'annual' | 'quarterly' | 'ttm'>('annual')
+  const [splitView, setSplitView] = useState(false)
 
   const [summary, setSummary] = useState<SummaryResponse | null>(() => summaryCache.get(`${initialRoute.ticker}_annual`) || null)
+  const [radarSummary, setRadarSummary] = useState<SummaryResponse | null>(() => summaryCache.get(`${initialRoute.ticker}_ttm`) || null)
   const [loadingSummary, setLoadingSummary] = useState<boolean>(!summaryCache.has(`${initialRoute.ticker}_annual`))
   const [summaryError, setSummaryError] = useState<string | null>(null)
+  const [quote, setQuote] = useState<QuoteResponse | null>(() => quoteCache.get(initialRoute.ticker) || null)
 
   const [compact, setCompact] = useState<boolean>(true)
   const [cmdkOpen, setCmdkOpen] = useState<boolean>(false)
   const [shortcutsOpen, setShortcutsOpen] = useState<boolean>(false)
+  const [tearSheetOpen, setTearSheetOpen] = useState<boolean>(false)
+
+  // Minimalist Paco Coursey toast notification
+  const [toastMessage, setToastMessage] = useState<string | null>(null)
+  const toastTimeoutRef = useRef<number | null>(null)
+
+  const showToast = useCallback((msg: string) => {
+    if (toastTimeoutRef.current) {
+      window.clearTimeout(toastTimeoutRef.current)
+    }
+    setToastMessage(msg)
+    toastTimeoutRef.current = window.setTimeout(() => {
+      setToastMessage(null)
+      toastTimeoutRef.current = null
+    }, 4000)
+  }, [])
 
   // Watchlist & Recents persisted to localStorage
   const [watchlist, setWatchlist] = useState<string[]>(() => {
@@ -153,21 +175,68 @@ export const App: React.FC = () => {
     }
   }, [darkMode])
 
-  // Fetch initial stats and companies
+  // Live automatic stats and companies synchronization
   useEffect(() => {
-    fetch('/api/stats')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data) setStats(data)
-      })
-      .catch(() => {})
+    let ignore = false
 
-    fetch('/api/companies')
-      .then((res) => (res.ok ? res.json() : []))
-      .then((data: Company[]) => {
-        setCompanies(data)
-      })
-      .catch(() => {})
+    const fetchStats = () => {
+      fetch(`/api/stats?_t=${Date.now()}`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data: DatabaseStats | null) => {
+          if (!ignore && data) {
+            setStats((prev) => {
+              if (
+                !prev ||
+                prev.total_companies !== data.total_companies ||
+                prev.total_facts !== data.total_facts ||
+                prev.total_filings !== data.total_filings
+              ) {
+                // If company count changed, re-fetch company list
+                if (!prev || prev.total_companies !== data.total_companies) {
+                  fetchCompanies()
+                }
+                return data
+              }
+              return prev
+            })
+          }
+        })
+        .catch(() => {})
+    }
+
+    const fetchCompanies = () => {
+      fetch(`/api/companies?_t=${Date.now()}`)
+        .then((res) => (res.ok ? res.json() : []))
+        .then((data: Company[]) => {
+          if (!ignore && data.length > 0) {
+            setCompanies(data)
+          }
+        })
+        .catch(() => {})
+    }
+
+    // Initial fetch
+    fetchStats()
+    fetchCompanies()
+
+    // Poll automatically every 2.5 seconds so numbers update in real time as facts are synced
+    const intervalId = window.setInterval(fetchStats, 2500)
+
+    // Re-fetch immediately whenever tab or window regains focus
+    const handleVisibilityChange = () => {
+      if (!document.hidden) fetchStats()
+    }
+    const handleFocus = () => fetchStats()
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('focus', handleFocus)
+
+    return () => {
+      ignore = true
+      window.clearInterval(intervalId)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('focus', handleFocus)
+    }
   }, [])
 
   // Keep URL hash in sync with ticker and tab
@@ -194,6 +263,38 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('hashchange', handleHashChange)
   }, [currentTicker, activeTab])
 
+  // Quote state synchronized with active ticker
+  useEffect(() => {
+    if (!currentTicker) return
+    let ignore = false
+    const norm = currentTicker.toUpperCase()
+    if (quoteCache.has(norm)) {
+      setQuote(quoteCache.get(norm)!)
+    }
+    prefetchQuote(norm).then((q) => {
+      if (!ignore && q) setQuote(q)
+    })
+    return () => {
+      ignore = true
+    }
+  }, [currentTicker])
+
+  // Instant zero-latency ticker selection using in-memory prefetch cache
+  const handleSelectTicker = useCallback((ticker: string) => {
+    const norm = ticker.toUpperCase()
+    const cached = summaryCache.get(`${norm}_${cadence}`) || summaryCache.get(`${norm}_annual`)
+    if (cached) {
+      setSummary(cached)
+      setLoadingSummary(false)
+      setSummaryError(null)
+    }
+    const cachedQuote = quoteCache.get(norm)
+    if (cachedQuote) {
+      setQuote(cachedQuote)
+    }
+    setCurrentTicker(norm)
+  }, [cadence])
+
   // Fetch company summary when ticker or statement cadence changes (with in-memory cache)
   useEffect(() => {
     let ignore = false
@@ -201,6 +302,11 @@ export const App: React.FC = () => {
 
     if (summaryCache.has(cacheKey)) {
       setSummary(summaryCache.get(cacheKey)!)
+      if (cadence === 'ttm') setRadarSummary(summaryCache.get(cacheKey)!)
+      setLoadingSummary(false)
+      setSummaryError(null)
+    } else if (summaryCache.has(`${currentTicker}_annual`)) {
+      setSummary(summaryCache.get(`${currentTicker}_annual`)!)
       setLoadingSummary(false)
       setSummaryError(null)
     } else {
@@ -224,6 +330,7 @@ export const App: React.FC = () => {
         if (!ignore) {
           summaryCache.set(cacheKey, data)
           setSummary(data)
+          if (cadence === 'ttm') setRadarSummary(data)
         }
       })
       .catch((err) => {
@@ -240,20 +347,65 @@ export const App: React.FC = () => {
     }
   }, [currentTicker, cadence])
 
+  // Keep the forensic briefing on a consistent TTM basis regardless of the statement cadence.
+  useEffect(() => {
+    let ignore = false
+    const cacheKey = `${currentTicker}_ttm`
+    const cached = summaryCache.get(cacheKey)
+    setRadarSummary(cached || null)
+
+    if (cadence === 'ttm') {
+      return () => {
+        ignore = true
+      }
+    }
+
+    fetch(`/api/company/${currentTicker}/summary?view=ttm`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: SummaryResponse | null) => {
+        if (!ignore && data) {
+          summaryCache.set(cacheKey, data)
+          setRadarSummary(data)
+        }
+      })
+      .catch(() => {})
+
+    return () => {
+      ignore = true
+    }
+  }, [currentTicker, cadence])
+
   // Navigation handlers
   const handlePrevTicker = useCallback(() => {
     if (companies.length === 0) return
     const idx = companies.findIndex((c) => c.ticker === currentTicker)
     const prevIdx = idx > 0 ? idx - 1 : companies.length - 1
-    setCurrentTicker(companies[prevIdx].ticker)
-  }, [companies, currentTicker])
+    handleSelectTicker(companies[prevIdx].ticker)
+  }, [companies, currentTicker, handleSelectTicker])
 
   const handleNextTicker = useCallback(() => {
     if (companies.length === 0) return
     const idx = companies.findIndex((c) => c.ticker === currentTicker)
     const nextIdx = idx < companies.length - 1 ? idx + 1 : 0
-    setCurrentTicker(companies[nextIdx].ticker)
-  }, [companies, currentTicker])
+    handleSelectTicker(companies[nextIdx].ticker)
+  }, [companies, currentTicker, handleSelectTicker])
+
+  // One-Click "Tear Sheet" Card Export Handler (⌘ + Shift + S)
+  const handleTriggerTearSheet = useCallback(async () => {
+    if (!summary) return
+    setTearSheetOpen(true)
+    try {
+      const b = await renderTearSheetToBlob(summary, quote)
+      if (navigator.clipboard && window.ClipboardItem) {
+        await navigator.clipboard.write([
+          new ClipboardItem({ 'image/png': b }),
+        ])
+        showToast(`Copied ${summary.ticker} Tear Sheet PNG (2x Retina) to clipboard! Ready to paste into X, Substack, or Slack.`)
+      }
+    } catch (err) {
+      console.warn('Auto clipboard write on shortcut:', err)
+    }
+  }, [summary, quote, showToast])
 
   // Global keyboard shortcuts
   useEffect(() => {
@@ -264,6 +416,19 @@ export const App: React.FC = () => {
         target.tagName === 'TEXTAREA' ||
         target.tagName === 'SELECT'
       ) {
+        return
+      }
+
+      if ((e.metaKey || e.ctrlKey) && (e.key === '\\' || e.code === 'Backslash')) {
+        e.preventDefault()
+        setSplitView((value) => !value)
+        return
+      }
+
+      // One-Click Tear Sheet Export: ⌘ + Shift + S or Ctrl + Shift + S
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault()
+        handleTriggerTearSheet()
         return
       }
 
@@ -318,12 +483,13 @@ export const App: React.FC = () => {
       } else if (e.key === 'Escape') {
         setCmdkOpen(false)
         setShortcutsOpen(false)
+        setTearSheetOpen(false)
       }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [handlePrevTicker, handleNextTicker, handleCycleRainbowMode])
+  }, [handlePrevTicker, handleNextTicker, handleCycleRainbowMode, handleTriggerTearSheet])
 
   return (
     <div className="min-h-screen relative text-neutral-900 dark:text-neutral-100 flex flex-col font-sans selection:bg-neutral-200 dark:selection:bg-neutral-800 transition-colors duration-150">
@@ -336,9 +502,12 @@ export const App: React.FC = () => {
         currentTicker={currentTicker}
         watchlist={watchlist}
         recentTickers={recentTickers}
-        onSelectTicker={(t) => setCurrentTicker(t)}
+        onSelectTicker={handleSelectTicker}
         onOpenCmdk={() => setCmdkOpen(true)}
         onOpenShortcuts={() => setShortcutsOpen(true)}
+        onOpenTearSheet={() => setTearSheetOpen(true)}
+        splitView={splitView}
+        onToggleSplitView={() => setSplitView((value) => !value)}
         darkMode={darkMode}
         onToggleTheme={() => setDarkMode(!darkMode)}
         rainbowMode={rainbowMode}
@@ -346,7 +515,16 @@ export const App: React.FC = () => {
       />
 
       {/* Main Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-4 space-y-6">
+      <main className={`flex-1 ${splitView ? 'max-w-[1800px]' : 'max-w-7xl'} w-full mx-auto px-4 sm:px-6 py-4 space-y-6`}>
+        {splitView ? (
+          <SplitWorkspace
+            initialTicker={currentTicker}
+            initialTab={activeTab}
+            companies={companies}
+            onExit={() => setSplitView(false)}
+          />
+        ) : (
+        <>
         {/* Company Headline & 3-Column Editorial Grid */}
         <CompanyHeader
           summary={summary}
@@ -355,6 +533,12 @@ export const App: React.FC = () => {
           onSelectTab={setActiveTab}
           isWatched={watchlist.includes(currentTicker)}
           onToggleWatchlist={() => toggleWatchlist(currentTicker)}
+          onOpenTearSheet={() => setTearSheetOpen(true)}
+        />
+
+        <ForensicBriefing
+          summary={radarSummary?.ticker === currentTicker ? radarSummary : null}
+          quote={quote}
         />
 
         {/* View Tabs */}
@@ -387,7 +571,7 @@ export const App: React.FC = () => {
             )}
 
             {activeTab === 'dcf' && (
-              <DCFModeler summary={summary} compact={compact} />
+              <DCFModeler summary={summary} compact={compact} quote={quote} />
             )}
 
             {activeTab === 'intangibles' && (
@@ -403,7 +587,7 @@ export const App: React.FC = () => {
                 companies={companies}
                 currentTicker={currentTicker}
                 onSelectTicker={(t) => {
-                  setCurrentTicker(t)
+                  handleSelectTicker(t)
                   setActiveTab('statements')
                 }}
               />
@@ -414,12 +598,14 @@ export const App: React.FC = () => {
                 currentTicker={currentTicker}
                 companies={companies}
                 onSelectTicker={(t) => {
-                  setCurrentTicker(t)
+                  handleSelectTicker(t)
                   setActiveTab('statements')
                 }}
               />
             )}
           </div>
+        )}
+        </>
         )}
       </main>
 
@@ -437,7 +623,9 @@ export const App: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-4 text-[11px] text-neutral-500 font-mono">
-            <span>528 Companies in SQLite</span>
+            <span>
+              {stats ? `${stats.total_companies.toLocaleString()} Companies in SQLite` : 'SQLite Database'}
+            </span>
             <span>•</span>
             <span>
               Press{' '}
@@ -445,6 +633,14 @@ export const App: React.FC = () => {
                 ⌘K
               </kbd>{' '}
               to search
+            </span>
+            <span>•</span>
+            <span>
+              Press{' '}
+              <kbd className="px-1 py-0.5 rounded bg-neutral-100 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800">
+                ⌘⇧S
+              </kbd>{' '}
+              for Tear Sheet
             </span>
           </div>
         </div>
@@ -455,8 +651,9 @@ export const App: React.FC = () => {
         open={cmdkOpen}
         onOpenChange={setCmdkOpen}
         companies={companies}
+        stats={stats}
         currentTicker={currentTicker}
-        onSelectTicker={(t) => setCurrentTicker(t)}
+        onSelectTicker={handleSelectTicker}
         activeTab={activeTab}
         onSelectTab={setActiveTab}
         darkMode={darkMode}
@@ -464,6 +661,7 @@ export const App: React.FC = () => {
         onToggleCompact={() => setCompact(!compact)}
         rainbowMode={rainbowMode}
         onCycleRainbowMode={handleCycleRainbowMode}
+        onOpenTearSheet={() => setTearSheetOpen(true)}
       />
 
       {/* Keyboard Shortcuts Modal */}
@@ -471,6 +669,31 @@ export const App: React.FC = () => {
         open={shortcutsOpen}
         onClose={() => setShortcutsOpen(false)}
       />
+
+      {/* One-Click Tear Sheet Card Modal (⌘ + Shift + S) */}
+      <TearSheetModal
+        open={tearSheetOpen}
+        onClose={() => setTearSheetOpen(false)}
+        summary={summary}
+        quote={quote}
+        onToast={showToast}
+      />
+
+      {/* Minimalist Paco Coursey Editorial Toast Notification */}
+      {toastMessage && (
+        <div className="fixed bottom-6 right-6 z-50 animate-in fade-in slide-in-from-bottom-2 duration-150">
+          <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-neutral-950 text-white border border-neutral-800 shadow-2xl font-mono text-xs max-w-md">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0 animate-pulse" />
+            <span className="font-sans text-neutral-200 text-xs">{toastMessage}</span>
+            <button
+              onClick={() => setToastMessage(null)}
+              className="ml-auto text-neutral-500 hover:text-white p-0.5 transition-colors"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

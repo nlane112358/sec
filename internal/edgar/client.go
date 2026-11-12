@@ -163,6 +163,65 @@ func (c *Client) get(
 	return fmt.Errorf("request failed after retries: %w", lastErr)
 }
 
+func (c *Client) FetchDocument(ctx context.Context, docURL string) ([]byte, error) {
+	var lastErr error
+	var retryDelay time.Duration
+
+	for attempt := 0; attempt < 4; attempt++ {
+		if attempt > 0 {
+			if err := waitContext(ctx, retryDelay); err != nil {
+				return nil, err
+			}
+		}
+		if err := secRequestLimiter.Wait(ctx); err != nil {
+			return nil, err
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, docURL, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("User-Agent", c.userAgent)
+		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+
+		resp, err := c.http.Do(req)
+		if err != nil {
+			lastErr = err
+			retryDelay = retryBackoff(attempt)
+			continue
+		}
+
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+		resp.Body.Close()
+
+		if readErr != nil {
+			lastErr = readErr
+			retryDelay = retryBackoff(attempt)
+			continue
+		}
+
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+			lastErr = fmt.Errorf("SEC returned HTTP %d", resp.StatusCode)
+			retryDelay = retryBackoff(attempt)
+			if resp.StatusCode == http.StatusTooManyRequests {
+				if serverDelay, ok := parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()); ok && serverDelay > retryDelay {
+					retryDelay = serverDelay
+				}
+			}
+			continue
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("SEC returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+
+		return body, nil
+	}
+
+	return nil, fmt.Errorf("fetch document failed after retries: %w", lastErr)
+}
+
 func retryBackoff(attempt int) time.Duration {
 	return time.Duration(1<<uint(attempt)) * 500 * time.Millisecond
 }

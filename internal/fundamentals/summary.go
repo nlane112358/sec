@@ -208,6 +208,21 @@ var summaryMetricDefinitions = []summaryMetricDefinition{
 		},
 	},
 	{
+		name: "Accounts Receivable",
+		concepts: []summaryConcept{
+			{taxonomy: "us-gaap", concept: "AccountsReceivableNetCurrent"},
+			{taxonomy: "us-gaap", concept: "AccountsReceivableNet"},
+			{taxonomy: "us-gaap", concept: "AccountsReceivableTradeCurrent"},
+			{taxonomy: "us-gaap", concept: "AccountsNotesAndLoansReceivableNetCurrent"},
+			{taxonomy: "us-gaap", concept: "AccountsNotesAndLoansReceivableNet"},
+			{taxonomy: "us-gaap", concept: "ReceivablesNetCurrent"},
+			{taxonomy: "ifrs-full", concept: "CurrentTradeReceivables"},
+			{taxonomy: "ifrs-full", concept: "TradeAndOtherCurrentReceivables"},
+			{taxonomy: "ifrs-full", concept: "TradeAndOtherReceivables"},
+			{taxonomy: "ifrs-full", concept: "TradeReceivables"},
+		},
+	},
+	{
 		name: "Current Liabilities",
 		concepts: []summaryConcept{
 			{taxonomy: "us-gaap", concept: "LiabilitiesCurrent"},
@@ -317,8 +332,8 @@ func LoadFinancialSummary(ctx context.Context, s *store.Store, yearCount int, ti
 	if yearCount < 1 {
 		yearCount = 5
 	}
-	if yearCount > 6 {
-		yearCount = 6
+	if yearCount > 10 {
+		yearCount = 10
 	}
 	var summary FinancialSummary
 	var cik string
@@ -381,15 +396,29 @@ FROM sec_facts WHERE cik = ?`, cik)
 				capEx := summaryMetricValue(summary.Metrics, "Capital Expenditure", i)
 				if cashFlow.Present && capEx.Present && cashFlow.Unit == capEx.Unit {
 					metric.Values[i] = SummaryValue{
-						Value:   cashFlow.Value - math.Abs(capEx.Value),
-						Unit:    cashFlow.Unit,
-						Present: true,
+						Value:       cashFlow.Value - math.Abs(capEx.Value),
+						Unit:        cashFlow.Unit,
+						Present:     true,
+						Taxonomy:    cashFlow.Taxonomy,
+						Concept:     cashFlow.Concept,
+						Form:        cashFlow.Form,
+						FilingDate:  cashFlow.FilingDate,
+						Accession:   cashFlow.Accession,
+						PeriodEnd:   period.End,
+						Calculation: fmt.Sprintf("Operating Cash Flow (%s) - Capital Expenditure (%s)", formatNumberBrief(cashFlow.Value), formatNumberBrief(math.Abs(capEx.Value))),
 					}
 				} else if cashFlow.Present && !capEx.Present {
 					metric.Values[i] = SummaryValue{
-						Value:   cashFlow.Value,
-						Unit:    cashFlow.Unit,
-						Present: true,
+						Value:       cashFlow.Value,
+						Unit:        cashFlow.Unit,
+						Present:     true,
+						Taxonomy:    cashFlow.Taxonomy,
+						Concept:     cashFlow.Concept,
+						Form:        cashFlow.Form,
+						FilingDate:  cashFlow.FilingDate,
+						Accession:   cashFlow.Accession,
+						PeriodEnd:   period.End,
+						Calculation: "Operating Cash Flow (no CapEx reported)",
 					}
 				}
 			case definition.ownerEarnings:
@@ -397,8 +426,16 @@ FROM sec_facts WHERE cik = ?`, cik)
 				sbc := summaryMetricValue(summary.Metrics, "Stock-Based Compensation", i)
 				if freeCashFlow.Present && sbc.Present && strings.EqualFold(freeCashFlow.Unit, sbc.Unit) {
 					metric.Values[i] = SummaryValue{
-						Value: freeCashFlow.Value - math.Abs(sbc.Value),
-						Unit:  freeCashFlow.Unit, Present: true,
+						Value:       freeCashFlow.Value - math.Abs(sbc.Value),
+						Unit:        freeCashFlow.Unit,
+						Present:     true,
+						Taxonomy:    freeCashFlow.Taxonomy,
+						Concept:     freeCashFlow.Concept,
+						Form:        freeCashFlow.Form,
+						FilingDate:  freeCashFlow.FilingDate,
+						Accession:   freeCashFlow.Accession,
+						PeriodEnd:   period.End,
+						Calculation: fmt.Sprintf("Free Cash Flow (%s) - Stock-Based Compensation (%s)", formatNumberBrief(freeCashFlow.Value), formatNumberBrief(math.Abs(sbc.Value))),
 					}
 				}
 			case definition.name == "Capital Expenditure":
@@ -429,7 +466,46 @@ FROM sec_facts WHERE cik = ?`, cik)
 	deriveOperatingIncome(&summary)
 	sanitizeSharesOutstanding(&summary)
 	deriveIntangibleMetrics(&summary, facts, allPeriodEnds)
+
+	for mIdx := range summary.Metrics {
+		metricName := summary.Metrics[mIdx].Name
+		for pIdx := range summary.Metrics[mIdx].Values {
+			val := &summary.Metrics[mIdx].Values[pIdx]
+			if val.Present && pIdx < len(summary.Periods) {
+				p := summary.Periods[pIdx]
+				yearStr := p.Year
+				if yearStr == "" {
+					yearStr = p.End
+				}
+				if val.Formula == "" {
+					val.Formula = fmt.Sprintf("=SEC(\"%s\", \"%s\", %s)", summary.Ticker, metricName, yearStr)
+				}
+			}
+		}
+	}
+
 	return summary, nil
+}
+
+func formatNumberBrief(v float64) string {
+	abs := math.Abs(v)
+	sign := ""
+	if v < 0 {
+		sign = "-"
+	}
+	if abs >= 1e12 {
+		return fmt.Sprintf("%s$%.2fT", sign, abs/1e12)
+	}
+	if abs >= 1e9 {
+		return fmt.Sprintf("%s$%.2fB", sign, abs/1e9)
+	}
+	if abs >= 1e6 {
+		return fmt.Sprintf("%s$%.2fM", sign, abs/1e6)
+	}
+	if abs >= 1e3 {
+		return fmt.Sprintf("%s$%.2fK", sign, abs/1e3)
+	}
+	return fmt.Sprintf("%s$%.2f", sign, abs)
 }
 
 // sanitizeSharesOutstanding ensures that Shares Outstanding is at least 50% of
@@ -506,7 +582,17 @@ func deriveOperatingIncome(summary *FinancialSummary) {
 		if i < len(impairment) && impairment[i].Present && strings.EqualFold(impairment[i].Unit, revenue[i].Unit) {
 			value -= math.Abs(impairment[i].Value)
 		}
-		operatingIncome[i] = SummaryValue{Value: value, Unit: revenue[i].Unit, Present: true}
+		operatingIncome[i] = SummaryValue{
+			Value:       value,
+			Unit:        revenue[i].Unit,
+			Present:     true,
+			Taxonomy:    revenue[i].Taxonomy,
+			Form:        revenue[i].Form,
+			FilingDate:  revenue[i].FilingDate,
+			Accession:   revenue[i].Accession,
+			PeriodEnd:   revenue[i].PeriodEnd,
+			Calculation: fmt.Sprintf("Revenue (%s) - Cost of Revenue (%s) - SG&A (%s) - R&D (%s)", formatNumberBrief(revenue[i].Value), formatNumberBrief(cost[i].Value), formatNumberBrief(sga[i].Value), formatNumberBrief(research[i].Value)),
+		}
 	}
 }
 
@@ -547,9 +633,16 @@ func selectSGA(facts []summaryFact, periodEnd string, concepts []summaryConcept,
 	ga, okGA := selectSummaryFact(facts, gaConcepts, periodEnd, preferredCurrency...)
 	if okSM && okGA && strings.EqualFold(sm.Unit, ga.Unit) {
 		return SummaryValue{
-			Value:   math.Abs(sm.Value) + math.Abs(ga.Value),
-			Unit:    sm.Unit,
-			Present: true,
+			Value:       math.Abs(sm.Value) + math.Abs(ga.Value),
+			Unit:        sm.Unit,
+			Present:     true,
+			Taxonomy:    sm.Taxonomy,
+			Concept:     sm.Concept,
+			Form:        sm.Form,
+			FilingDate:  sm.FilingDate,
+			Accession:   sm.Accession,
+			PeriodEnd:   periodEnd,
+			Calculation: fmt.Sprintf("Selling & Marketing (%s) + General & Administrative (%s)", formatNumberBrief(sm.Value), formatNumberBrief(ga.Value)),
 		}
 	}
 	if okSM {
@@ -1044,7 +1137,17 @@ func selectSummaryFact(facts []summaryFact, concepts []summaryConcept, periodEnd
 				best = candidate
 			}
 		}
-		return SummaryValue{Value: best.value, Unit: best.unit, Present: true}, true
+		return SummaryValue{
+			Value:      best.value,
+			Unit:       best.unit,
+			Present:    true,
+			Taxonomy:   best.taxonomy,
+			Concept:    best.concept,
+			Form:       best.form,
+			FilingDate: best.filed,
+			Accession:  best.accession,
+			PeriodEnd:  best.end,
+		}, true
 	}
 	return SummaryValue{}, false
 }
@@ -1278,7 +1381,17 @@ func selectDebtFact(facts []summaryFact, concepts []summaryConcept, periodEnd st
 			}
 		}
 		if found {
-			return SummaryValue{Value: best.value, Unit: best.unit, Present: true}, true
+			return SummaryValue{
+			Value:      best.value,
+			Unit:       best.unit,
+			Present:    true,
+			Taxonomy:   best.taxonomy,
+			Concept:    best.concept,
+			Form:       best.form,
+			FilingDate: best.filed,
+			Accession:  best.accession,
+			PeriodEnd:  best.end,
+		}, true
 		}
 	}
 	return SummaryValue{}, false

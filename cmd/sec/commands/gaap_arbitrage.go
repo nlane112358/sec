@@ -31,7 +31,7 @@ func RunModernGAAPArbitrage(parent context.Context, args []string, output, error
 	years := flags.Int("years", 5, "years of history to analyze")
 	dataDir := flags.String("data-dir", store.DefaultDirectory(), "directory containing the shared SQLite database")
 
-	if err := ParseCommandFlags(flags, args, "prices", "min-adj-roic", "min-yield", "max-gaap-roic", "sort", "include-financials", "universe", "years", "data-dir"); err != nil {
+	if err := ParseCommandFlags(flags, args, "prices", "min-adj-roic", "min-yield", "max-gaap-roic", "sort", "universe", "years", "data-dir"); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}

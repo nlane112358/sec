@@ -17,7 +17,7 @@ func RunAudit(parent context.Context, args []string, output, errorOutput io.Writ
 	gapsOnly := flags.Bool("gaps-only", false, "only list companies that have missing data")
 	dataDir := flags.String("data-dir", store.DefaultDirectory(), "directory containing the shared SQLite database")
 
-	if err := ParseCommandFlags(flags, args, "gaps-only", "data-dir"); err != nil {
+	if err := ParseCommandFlags(flags, args, "data-dir"); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
