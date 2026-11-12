@@ -17,12 +17,13 @@ import (
 
 func RunSync(parent context.Context, args []string, output, errorOutput io.Writer) error {
 	flags := flag.NewFlagSet("sync", flag.ContinueOnError)
-	SetFlagUsage(flags, errorOutput, "usage: sec sync TICKER... [--workers 1-4] [--data-dir DIR] [--ua STRING]\n       sec sync --universe FILE [--workers 1-4] [--data-dir DIR] [--ua STRING]")
+	SetFlagUsage(flags, errorOutput, "usage: sec sync TICKER... [--workers 1-4] [--data-dir DIR] [--ua STRING]\n       sec sync --universe FILE [--workers 1-4] [--data-dir DIR] [--ua STRING] [--skip-existing]")
 	dataDir := flags.String("data-dir", store.DefaultDirectory(), "directory containing the shared SQLite database")
 	userAgent := flags.String("ua", os.Getenv("SEC_USER_AGENT"), "SEC User-Agent including contact email")
 	universeFile := flags.String("universe", "", "file containing one ticker per line")
 	workers := flags.Int("workers", 4, "concurrent sync workers (1-4)")
-	if err := ParseCommandFlags(flags, args, "data-dir", "ua", "universe", "workers"); err != nil {
+	skipExisting := flags.Bool("skip-existing", false, "skip companies already present in the database")
+	if err := ParseCommandFlags(flags, args, "data-dir", "ua", "universe", "workers", "skip-existing"); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
@@ -72,6 +73,12 @@ func RunSync(parent context.Context, args []string, output, errorOutput io.Write
 				if err := parent.Err(); err != nil {
 					failures[job.index] = err
 					continue
+				}
+				if *skipExisting {
+					if _, _, _, errExist := s.CompanyForTicker(parent, job.ticker); errExist == nil {
+						fmt.Fprintf(safeErrorOutput, "[%d/%d] Skipping %s (already synced)\n", job.index+1, len(tickers), job.ticker)
+						continue
+					}
 				}
 				ctx, cancel := context.WithTimeout(parent, 90*time.Second)
 				err := SyncCompany(ctx, client, s, job.ticker, job.index+1, len(tickers), databasePath, safeOutput, safeErrorOutput)

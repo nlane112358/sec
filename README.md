@@ -13,6 +13,31 @@ SEC EDGAR requires an identifying `User-Agent` with contact information via `SEC
 
 ## Commands
 
+### Web Terminal (`serve`)
+
+Start the interactive web application inspired by the minimalist, editorial craft of [paco.me](https://paco.me) (Paco Coursey):
+
+```sh
+./sec serve
+./sec serve --port 8080
+```
+
+Access the frontend at `http://localhost:8080`.
+- **Command Menu (`cmdk`)**: Press `⌘K` or `/` for instant fuzzy search across 528 companies, quick tab switching, and actions.
+- **5-Year Statements & Micro-Sparklines**: Clean tabular statements with inline 5-year SVG sparklines, SBC highlights, Peters & Taylor adjustments, CSV/JSON export, and 1-click Markdown Executive Investment Memo generation.
+- **Interactive Forward & Reverse DCF**: Dynamic sliders for Growth, WACC/Discount, and Terminal Growth with real-time per-share intrinsic valuation, EV-to-equity bridge, 3x3 sensitivity matrix, shareable model URLs, and a **Reverse DCF (Expectations Arbitrage)** solver finding market-implied growth and alpha spread.
+- **Intangible Capitalization & Waterfall**: Modern GAAP arbitrage breakdown (5-year linear R&D amortization, 30% SG&A brand capital over 3 years) with visual step-by-step Capitalization Waterfall bridge.
+- **Buffett Compounder Screener**: Multi-factor institutional ranking across 528 companies with 0–100 quality scores, Intangible-adjusted ROIC, FCF conversion, 5Y revenue CAGR, and share cannibalism/buyback filters.
+- **Side-by-Side Peer Benchmarking**: Direct competitor matrix comparing ROIC, margins, growth, and quality scores with 1-click navigation.
+- **Watchlists & Recents**: Quick star watchlists and recent history tray in navigation for rapid switching.
+- **SEC Filings Browser**: Complete filing history with direct links to SEC EDGAR documents.
+- **Keyboard-driven navigation**: `[` / `]` to cycle companies, `1`-`6` to switch views, `t` to toggle dark/light theme, `?` for shortcuts.
+
+For local frontend development with instant Hot Module Replacement:
+```sh
+cd web && npm run dev
+```
+
 ### Sync Universe
 
 Download `us-gaap`, `ifrs-full`, and `dei` facts plus complete filing histories (including amendments) into `data/sec.db`:

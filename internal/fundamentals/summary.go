@@ -1305,11 +1305,19 @@ func summaryMetricValue(metrics []SummaryMetric, name string, index int) Summary
 }
 
 func WriteFinancialSummary(output io.Writer, summary FinancialSummary) error {
-	if _, err := fmt.Fprintf(output, "%s (%s) — annual facts\n", summary.Company, summary.Ticker); err != nil {
+	viewType := "annual facts"
+	if len(summary.Periods) > 0 {
+		if summary.Periods[0].Quarter == "TTM" || summary.Periods[0].Year == "TTM" {
+			viewType = "TTM & multi-year facts"
+		} else if summary.Periods[0].Quarter != "" {
+			viewType = "quarterly facts (10-Q)"
+		}
+	}
+	if _, err := fmt.Fprintf(output, "%s (%s) — %s\n", summary.Company, summary.Ticker, viewType); err != nil {
 		return err
 	}
 	if len(summary.Periods) == 0 {
-		_, err := fmt.Fprintln(output, "No annual facts are saved yet. Refresh this company first.")
+		_, err := fmt.Fprintln(output, "No financial facts are saved yet. Refresh this company first.")
 		return err
 	}
 	writer := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
@@ -1317,7 +1325,13 @@ func WriteFinancialSummary(output io.Writer, summary FinancialSummary) error {
 		return err
 	}
 	for _, period := range summary.Periods {
-		if _, err := fmt.Fprintf(writer, "\tFY %s", period.Year); err != nil {
+		label := "FY " + period.Year
+		if period.Label != "" {
+			label = period.Label
+		} else if period.Quarter != "" {
+			label = period.Quarter + " " + period.Year
+		}
+		if _, err := fmt.Fprintf(writer, "\t%s", label); err != nil {
 			return err
 		}
 	}

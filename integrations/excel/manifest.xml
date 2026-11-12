@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OfficeApp 
+          xmlns="http://schemas.microsoft.com/office/appforoffice/1.1" 
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+          xsi:type="TaskpaneApp">
+  <Id>b29d4c88-5188-469b-90f7-920f78c93a11</Id>
+  <Version>1.0.0.0</Version>
+  <ProviderName>SEC Fundamentals</ProviderName>
+  <DefaultLocale>en-US</DefaultLocale>
+  <DisplayName DefaultValue="SEC EDGAR Fundamentals" />
+  <Description DefaultValue="Live SEC EDGAR financial statements, Intangible-adjusted ROIC, and DCF metrics." />
+  <IconUrl DefaultValue="http://localhost:8080/favicon.ico"/>
+  <SupportUrl DefaultValue="http://localhost:8080"/>
+  <AppDomains>
+    <AppDomain>http://localhost:8080</AppDomain>
+  </AppDomains>
+  <Hosts>
+    <Host Name="Workbook" />
+  </Hosts>
+  <DefaultSettings>
+    <SourceLocation DefaultValue="http://localhost:8080" />
+  </DefaultSettings>
+  <Permissions>ReadWriteDocument</Permissions>
+</OfficeApp>

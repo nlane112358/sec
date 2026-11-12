@@ -67,19 +67,28 @@ func SharedDatabasePath(dataDir string) string {
 	return filepath.Join(dataDir, "sec.db")
 }
 
+func resolveUniversePath(path string) string {
+	candidates := []string{
+		path,
+		path + ".txt",
+		filepath.Join("universes", path),
+		filepath.Join("universes", path + ".txt"),
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return c
+		}
+	}
+	return path
+}
+
 func LoadTickerUniverse(args []string, path string) ([]string, error) {
 	if path != "" && len(args) != 0 {
 		return nil, errors.New("provide tickers or --universe FILE, not both")
 	}
 	rawTickers := append([]string(nil), args...)
 	if path != "" {
-		filePath := path
-		if _, err := os.Stat(filePath); errors.Is(err, os.ErrNotExist) {
-			alt := filepath.Join("universes", path)
-			if _, errAlt := os.Stat(alt); errAlt == nil {
-				filePath = alt
-			}
-		}
+		filePath := resolveUniversePath(path)
 		file, err := os.Open(filePath)
 		if err != nil {
 			return nil, fmt.Errorf("open ticker universe: %w", err)

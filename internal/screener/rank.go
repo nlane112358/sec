@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -17,51 +18,51 @@ import (
 )
 
 type RankedCompany struct {
-	Ticker               string
-	Company              string
-	Score                float64
-	Year                 string
-	TrendYears           int
-	Revenue              float64
-	Currency             string
-	ROIC                 float64
-	HasROIC              bool
-	ROE                  float64
-	HasROE               bool
-	OperatingMargin      float64
-	OperatingConsistency float64
-	HasOperatingMargin   bool
-	FCFMargin            float64
-	OwnerEarningsMargin  float64
-	HasOwnerEarnings     bool
-	HasSBCAdjustment     bool
-	RevenueCAGR          float64
-	EPSGrowth            float64
-	HasEPSGrowth         bool
-	BalanceSheetQuality  float64
-	HasBalanceSheet      bool
-	BookValueGrowth      float64
-	HasBookValueGrowth   bool
-	ShareReduction       float64
-	HasShareTrend        bool
-	SplitAdjusted        bool
-	Sector               string
-	PeerGroup            string
+	Ticker               string  `json:"ticker"`
+	Company              string  `json:"company"`
+	Score                float64 `json:"score"`
+	Year                 string  `json:"year"`
+	TrendYears           int     `json:"trend_years"`
+	Revenue              float64 `json:"revenue"`
+	Currency             string  `json:"currency"`
+	ROIC                 float64 `json:"roic"`
+	HasROIC              bool    `json:"has_roic"`
+	ROE                  float64 `json:"roe"`
+	HasROE               bool    `json:"has_roe"`
+	OperatingMargin      float64 `json:"operating_margin"`
+	OperatingConsistency float64 `json:"operating_consistency"`
+	HasOperatingMargin   bool    `json:"has_operating_margin"`
+	FCFMargin            float64 `json:"fcf_margin"`
+	OwnerEarningsMargin  float64 `json:"owner_earnings_margin"`
+	HasOwnerEarnings     bool    `json:"has_owner_earnings"`
+	HasSBCAdjustment     bool    `json:"has_sbc_adjustment"`
+	RevenueCAGR          float64 `json:"revenue_cagr"`
+	EPSGrowth            float64 `json:"eps_growth"`
+	HasEPSGrowth         bool    `json:"has_eps_growth"`
+	BalanceSheetQuality  float64 `json:"balance_sheet_quality"`
+	HasBalanceSheet      bool    `json:"has_balance_sheet"`
+	BookValueGrowth      float64 `json:"book_value_growth"`
+	HasBookValueGrowth   bool    `json:"has_book_value_growth"`
+	ShareReduction       float64 `json:"share_reduction"`
+	HasShareTrend        bool    `json:"has_share_trend"`
+	SplitAdjusted        bool    `json:"split_adjusted"`
+	Sector               string  `json:"sector"`
+	PeerGroup            string  `json:"peer_group"`
 }
 
 type RankResult struct {
-	Companies            []RankedCompany
-	Considered           int
-	Excluded             int
-	Missing              []string
-	FinancialIncluded    int
-	FinancialExcluded    int
-	NonfinancialIncluded int
-	UnclassifiedIncluded int
-	SICUnavailable       int
-	SBCAdjusted          int
-	SBCFallback          int
-	MissingSolvencyData  int
+	Companies            []RankedCompany `json:"companies"`
+	Considered           int             `json:"considered"`
+	Excluded             int             `json:"excluded"`
+	Missing              []string        `json:"missing"`
+	FinancialIncluded    int             `json:"financial_included"`
+	FinancialExcluded    int             `json:"financial_excluded"`
+	NonfinancialIncluded int             `json:"nonfinancial_included"`
+	UnclassifiedIncluded int             `json:"unclassified_included"`
+	SICUnavailable       int             `json:"sic_unavailable"`
+	SBCAdjusted          int             `json:"sbc_adjusted"`
+	SBCFallback          int             `json:"sbc_fallback"`
+	MissingSolvencyData  int             `json:"missing_solvency_data"`
 }
 
 type rankCandidate struct {
@@ -118,8 +119,95 @@ func RankCompanies(ctx context.Context, s *store.Store, years int, minimumRevenu
 	found := make(map[string]struct{}, len(companies))
 	candidates := make([]rankCandidate, 0, len(companies))
 	excludeFin := len(excludeFinancials) > 0 && excludeFinancials[0]
+
+	type candidateResult struct {
+		candidate   rankCandidate
+		ok          bool
+		sector      string
+		excluded    bool
+		finInc      bool
+		nonFinInc   bool
+		unclass     bool
+		sicUnavail  bool
+		finExc      bool
+		sbcAdj      bool
+		sbcFall     bool
+		missingSolv bool
+	}
+
+	numWorkers := 8
+	jobs := make(chan store.LocalCompany, len(companies))
+	results := make(chan candidateResult, len(companies))
+
+	var wg sync.WaitGroup
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for company := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+				var cr candidateResult
+				sector := sectorFromSIC(company.SIC)
+				if sector == "Unclassified" {
+					cr.sicUnavail = true
+				}
+				if sector == "Financials" && excludeFin {
+					cr.excluded = true
+					cr.finExc = true
+					results <- cr
+					continue
+				}
+				recent, err := s.HasRecentFinancialFiling(ctx, company.Ticker, time.Now().AddDate(0, -15, 0))
+				if err != nil || !recent {
+					cr.excluded = true
+					results <- cr
+					continue
+				}
+				summary, err := fundamentals.LoadFinancialSummary(ctx, s, years, company.Ticker)
+				if err != nil {
+					cr.excluded = true
+					results <- cr
+					continue
+				}
+				financial := sector == "Financials"
+				candidate, ok := makeRankCandidate(summary, minimumRevenue, financial)
+				if !ok {
+					cr.excluded = true
+					results <- cr
+					continue
+				}
+				candidate.company.Sector = sector
+				candidate.company.PeerGroup = peerGroupFromSIC(company.SIC)
+				cr.sector = sector
+				cr.candidate = candidate
+				cr.ok = true
+				if sector == "Financials" {
+					cr.finInc = true
+				} else if sector == "Nonfinancial" {
+					cr.nonFinInc = true
+				} else {
+					cr.unclass = true
+				}
+				if candidate.company.HasSBCAdjustment {
+					cr.sbcAdj = true
+				} else if candidate.company.HasOwnerEarnings {
+					cr.sbcFall = true
+				}
+				if !financial && !candidate.company.HasBalanceSheet {
+					cr.missingSolv = true
+				}
+				results <- cr
+			}
+		}()
+	}
+
 	for _, company := range companies {
 		if err := ctx.Err(); err != nil {
+			close(jobs)
+			wg.Wait()
+			close(results)
 			return result, err
 		}
 		if len(requested) > 0 {
@@ -129,59 +217,44 @@ func RankCompanies(ctx context.Context, s *store.Store, years int, minimumRevenu
 		}
 		found[strings.ToUpper(company.Ticker)] = struct{}{}
 		result.Considered++
-		sector := sectorFromSIC(company.SIC)
-		if sector == "Unclassified" {
+		jobs <- company
+	}
+	close(jobs)
+	wg.Wait()
+	close(results)
+
+	for cr := range results {
+		if cr.sicUnavail {
 			result.SICUnavailable++
 		}
-		if sector == "Financials" && excludeFin {
-			result.Excluded++
+		if cr.finExc {
 			result.FinancialExcluded++
-			continue
 		}
-		recent, err := s.HasRecentFinancialFiling(ctx, company.Ticker, time.Now().AddDate(0, -15, 0))
-		if err != nil {
-			if ctx.Err() != nil {
-				return result, ctx.Err()
-			}
+		if cr.excluded {
 			result.Excluded++
 			continue
 		}
-		if !recent {
-			result.Excluded++
-			continue
-		}
-		summary, err := fundamentals.LoadFinancialSummary(ctx, s, years, company.Ticker)
-		if err != nil {
-			if ctx.Err() != nil {
-				return result, ctx.Err()
-			}
-			result.Excluded++
-			continue
-		}
-		financial := sector == "Financials"
-		candidate, ok := makeRankCandidate(summary, minimumRevenue, financial)
-		if !ok {
-			result.Excluded++
-			continue
-		}
-		candidate.company.Sector = sector
-		candidate.company.PeerGroup = peerGroupFromSIC(company.SIC)
-		if sector == "Financials" {
+		if cr.finInc {
 			result.FinancialIncluded++
-		} else if sector == "Nonfinancial" {
+		}
+		if cr.nonFinInc {
 			result.NonfinancialIncluded++
-		} else {
+		}
+		if cr.unclass {
 			result.UnclassifiedIncluded++
 		}
-		if candidate.company.HasSBCAdjustment {
+		if cr.sbcAdj {
 			result.SBCAdjusted++
-		} else if candidate.company.HasOwnerEarnings {
+		}
+		if cr.sbcFall {
 			result.SBCFallback++
 		}
-		if !financial && !candidate.company.HasBalanceSheet {
+		if cr.missingSolv {
 			result.MissingSolvencyData++
 		}
-		candidates = append(candidates, candidate)
+		if cr.ok {
+			candidates = append(candidates, cr.candidate)
+		}
 	}
 	for ticker := range requested {
 		if _, ok := found[ticker]; !ok {
@@ -280,7 +353,13 @@ func makeRankCandidate(summary fundamentals.FinancialSummary, minimumRevenue flo
 	assets := fundamentals.NamedMetric(summary, "Total Assets")
 	taxExpense := fundamentals.NamedMetric(summary, "Income Tax Expense")
 	pretaxIncome := fundamentals.NamedMetric(summary, "Income Before Tax")
-	shares, splitAdjusted := adjustSplitShareSeries(fundamentals.NamedMetric(summary, "Diluted Weighted Average Shares"))
+	sharesMetric := fundamentals.NamedMetric(summary, "Diluted Weighted Average Shares")
+	if len(sharesMetric) < trendYears+1 || !fundamentals.IsShareCount(sharesMetric[trendYears]) || sharesMetric[trendYears].Value <= 0 {
+		if fallback := fundamentals.NamedMetric(summary, "Shares Outstanding"); len(fallback) >= trendYears+1 && fundamentals.IsShareCount(fallback[trendYears]) && fallback[trendYears].Value > 0 {
+			sharesMetric = fallback
+		}
+	}
+	shares, splitAdjusted := adjustSplitShareSeries(sharesMetric)
 	if len(revenue) < trendYears+1 || len(netIncome) < trendYears+1 || len(shares) < trendYears+1 {
 		return rankCandidate{}, false
 	}

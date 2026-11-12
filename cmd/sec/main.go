@@ -24,8 +24,10 @@ Commands:
   audit TICKER                Deep-dive diagnostic on a company to discover raw tags
   read TICKER                 Browse and read saved filings
   list                        List companies in the shared database
+  universe [list]             List available universes and sync coverage
   export TICKER --format FMT  Export saved facts as csv or json
   rank [--universe FILE]      Screen and rank the saved universe
+  serve [--port PORT]         Start web server and interactive frontend
 
 Options:
   --data-dir DIR  directory containing sec.db (default SEC_DATABASE_DIR or data)
@@ -67,6 +69,8 @@ func run(parent context.Context, args []string, output, errorOutput io.Writer) e
 		return commands.RunRead(parent, args, output, errorOutput)
 	case "list":
 		return commands.RunList(parent, args, output, errorOutput)
+	case "universe", "universes":
+		return commands.RunUniverse(parent, args, output, errorOutput)
 	case "export":
 		return commands.RunExport(parent, args, output, errorOutput)
 	case "rank":
@@ -77,6 +81,8 @@ func run(parent context.Context, args []string, output, errorOutput io.Writer) e
 		return commands.RunModernGAAPArbitrage(parent, args, output, errorOutput)
 	case "audit":
 		return commands.RunAudit(parent, args, output, errorOutput)
+	case "serve":
+		return commands.RunServe(parent, args, output, errorOutput)
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", command, usage)
 	}

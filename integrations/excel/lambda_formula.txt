@@ -1,0 +1,30 @@
+# Microsoft Excel Zero-Install Formulas & LAMBDA Custom Function
+
+## Option 1: Direct Formula (Zero Install, Works in any cell)
+You can directly query the SEC API from any cell without installing any add-ins or macros:
+
+Raw Number (for financial modeling and math):
+=NUMBERVALUE(WEBSERVICE("http://localhost:8080/api/sec/" & A2 & "/" & B1 & "?raw=1"))
+
+Formatted String (e.g. "$245.1B" or "34.2%"):
+=WEBSERVICE("http://localhost:8080/api/sec/" & A2 & "/" & B1 & "?format=text")
+
+Example for Microsoft Adjusted ROIC:
+=NUMBERVALUE(WEBSERVICE("http://localhost:8080/api/sec/MSFT/ADJ_ROIC?raw=1"))
+
+---
+
+## Option 2: Define =SEC() in Excel Name Manager (Modern Excel 365 / 2021)
+You can define a native =SEC(...) formula in Excel that feels just like a built-in Excel function:
+
+1. In Excel, go to: Formulas tab > Name Manager (or Define Name).
+2. Click "New".
+3. Name: SEC
+4. Refers to (paste this single formula):
+=LAMBDA(ticker,metric,[period],NUMBERVALUE(WEBSERVICE("http://localhost:8080/api/sec/" & UPPER(TRIM(ticker)) & "/" & UPPER(TRIM(metric)) & "?period=" & IF(ISOMITTED(period),"TTM",period) & "&raw=1")))
+
+5. Click OK.
+6. Now you can type anywhere in your spreadsheet:
+   =SEC("MSFT", "ADJ_ROIC")
+   =SEC("AAPL", "REVENUE")
+   =SEC("NVDA", "FCF", "TTM")

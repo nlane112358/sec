@@ -1,0 +1,293 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --font-serif: 'Newsreader', Georgia, Cambria, 'Times', serif;
+    --font-mono: 'JetBrains Mono', Menlo, ui-monospace, monospace;
+    color-scheme: light dark;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Paco Coursey iconic italic serif style */
+  em, i, .editorial-italic {
+    font-family: var(--font-serif);
+    font-style: italic;
+    font-optical-sizing: auto;
+    font-size: 1.04em;
+    font-weight: 400;
+  }
+
+  /* Monospace figures */
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Paco Coursey editorial link styling */
+.paco-link {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+  text-decoration-color: rgba(0, 0, 0, 0.25);
+  transition: all 120ms ease;
+}
+
+.dark .paco-link {
+  text-decoration-color: rgba(255, 255, 255, 0.25);
+}
+
+.paco-link:hover {
+  text-decoration-color: currentColor;
+}
+
+/* Custom minimal scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(160, 160, 160, 0.2);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(160, 160, 160, 0.4);
+}
+
+/* cmdk styling */
+[cmdk-root] {
+  max-width: 640px;
+  width: 100%;
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  box-shadow: 0 16px 70px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+}
+
+.dark [cmdk-root] {
+  background: #09090b;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 16px 70px rgba(0, 0, 0, 0.6);
+}
+
+[cmdk-input] {
+  font-family: inherit;
+  border: none;
+  width: 100%;
+  font-size: 14px;
+  padding: 16px 18px;
+  outline: none;
+  background: transparent;
+  color: #111111;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.dark [cmdk-input] {
+  color: #fafafa;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+[cmdk-item] {
+  content-visibility: auto;
+  cursor: pointer;
+  height: 46px;
+  border-radius: 8px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px;
+  color: #555555;
+  user-select: none;
+  will-change: background, color;
+  transition: all 120ms ease;
+  margin: 2px 6px;
+}
+
+.dark [cmdk-item] {
+  color: #a1a1aa;
+}
+
+[cmdk-item][data-selected='true'] {
+  background: rgba(0, 0, 0, 0.05);
+  color: #000000;
+}
+
+.dark [cmdk-item][data-selected='true'] {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+}
+
+[cmdk-group-heading] {
+  user-select: none;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #888888;
+  padding: 10px 14px 4px;
+}
+
+.dark [cmdk-group-heading] {
+  color: #71717a;
+}
+
+[cmdk-empty] {
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 96px;
+  white-space: pre-wrap;
+  color: #888888;
+}
+
+/* =========================================================================
+   Google Gemini Changing Rainbow Aurora Ambient Background
+   ========================================================================= */
+
+@keyframes orb-float-1 {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+  }
+  33% {
+    transform: translate3d(5vw, -4vh, 0) scale(1.12) rotate(45deg);
+  }
+  66% {
+    transform: translate3d(-4vw, 5vh, 0) scale(0.92) rotate(90deg);
+  }
+  100% {
+    transform: translate3d(3vw, 2vh, 0) scale(1.05) rotate(135deg);
+  }
+}
+
+@keyframes orb-float-2 {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+  }
+  33% {
+    transform: translate3d(-6vw, 6vh, 0) scale(1.15) rotate(-50deg);
+  }
+  66% {
+    transform: translate3d(5vw, -4vh, 0) scale(0.88) rotate(-100deg);
+  }
+  100% {
+    transform: translate3d(-3vw, -3vh, 0) scale(1.08) rotate(-150deg);
+  }
+}
+
+@keyframes orb-float-3 {
+  0% {
+    transform: translate3d(0, 0, 0) scale(0.95) rotate(0deg);
+  }
+  50% {
+    transform: translate3d(8vw, 7vh, 0) scale(1.2) rotate(80deg);
+  }
+  100% {
+    transform: translate3d(-5vw, -6vh, 0) scale(1.02) rotate(160deg);
+  }
+}
+
+@keyframes orb-float-4 {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1.05) rotate(0deg);
+  }
+  50% {
+    transform: translate3d(-7vw, -6vh, 0) scale(0.9) rotate(-90deg);
+  }
+  100% {
+    transform: translate3d(6vw, 5vh, 0) scale(1.16) rotate(-180deg);
+  }
+}
+
+@keyframes orb-pulse {
+  0% {
+    transform: scale(1) translate3d(0, 0, 0);
+    opacity: 0.7;
+  }
+  50% {
+    transform: scale(1.1) translate3d(2vw, -2vh, 0);
+    opacity: 0.95;
+  }
+  100% {
+    transform: scale(0.94) translate3d(-2vw, 1vh, 0);
+    opacity: 0.75;
+  }
+}
+
+@keyframes rainbow-hue-shift {
+  0% {
+    filter: hue-rotate(0deg);
+  }
+  50% {
+    filter: hue-rotate(180deg);
+  }
+  100% {
+    filter: hue-rotate(360deg);
+  }
+}
+
+.animate-rainbow-normal {
+  animation: rainbow-hue-shift 34s linear infinite;
+}
+
+.animate-rainbow-fast {
+  animation: rainbow-hue-shift 18s linear infinite;
+}
+
+.animate-rainbow-slow {
+  animation: rainbow-hue-shift 52s linear infinite;
+}
+
+.animate-orb-float-1 {
+  animation: orb-float-1 26s ease-in-out infinite alternate;
+}
+
+.animate-orb-float-2 {
+  animation: orb-float-2 32s ease-in-out infinite alternate;
+}
+
+.animate-orb-float-3 {
+  animation: orb-float-3 28s ease-in-out infinite alternate;
+}
+
+.animate-orb-float-4 {
+  animation: orb-float-4 36s ease-in-out infinite alternate;
+}
+
+.animate-orb-pulse {
+  animation: orb-pulse 16s ease-in-out infinite alternate;
+}
+
+.rainbow-orb {
+  contain: layout style paint;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-orb-float-1,
+  .animate-orb-float-2,
+  .animate-orb-float-3,
+  .animate-orb-float-4,
+  .animate-orb-pulse,
+  .animate-rainbow-normal,
+  .animate-rainbow-fast,
+  .animate-rainbow-slow {
+    animation-duration: 120s;
+  }
+}
+

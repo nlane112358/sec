@@ -7,6 +7,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"text/tabwriter"
 
 	"sec/internal/fundamentals"
@@ -14,37 +15,37 @@ import (
 )
 
 type ModernGAAPCandidate struct {
-	Ticker                string
-	Company               string
-	SIC                   string
-	SICDescription        string
-	Currency              string
-	MarketCap             float64
-	HasMarketCap          bool
-	GAAPRevenue           float64
-	GAAPNetIncome         float64
-	GAAPOperatingIncome   float64
-	GAAPOperatingMargin   float64
-	GAAPROIC              float64
-	HasGAAPROIC           bool
-	GAAP_PE               float64
-	HasGAAP_PE            bool
-	GAAPUnprofitable      bool
-	IntangibleCapital     float64
-	AdjustedEBIT          float64
-	AdjustedEBITMargin    float64
-	AdjustedInvestedCap   float64
-	AdjustedROIC          float64
-	HasAdjustedROIC       bool
-	AvgAdjustedROIC       float64
-	ROICDelta             float64
-	SurgingROIC           bool
-	OwnerEarnings         float64
-	AdjustedOwnerEarnings float64
-	OwnerEarningsYield    float64
-	HasOwnerEarningsYield bool
-	ArbitrageScore        float64
-	ArbitrageSignal       string
+	Ticker                string  `json:"ticker"`
+	Company               string  `json:"company"`
+	SIC                   string  `json:"sic"`
+	SICDescription        string  `json:"sic_description"`
+	Currency              string  `json:"currency"`
+	MarketCap             float64 `json:"market_cap"`
+	HasMarketCap          bool    `json:"has_market_cap"`
+	GAAPRevenue           float64 `json:"gaap_revenue"`
+	GAAPNetIncome         float64 `json:"gaap_net_income"`
+	GAAPOperatingIncome   float64 `json:"gaap_operating_income"`
+	GAAPOperatingMargin   float64 `json:"gaap_operating_margin"`
+	GAAPROIC              float64 `json:"gaap_roic"`
+	HasGAAPROIC           bool    `json:"has_gaap_roic"`
+	GAAP_PE               float64 `json:"gaap_pe"`
+	HasGAAP_PE            bool    `json:"has_gaap_pe"`
+	GAAPUnprofitable      bool    `json:"gaap_unprofitable"`
+	IntangibleCapital     float64 `json:"intangible_capital"`
+	AdjustedEBIT          float64 `json:"adjusted_ebit"`
+	AdjustedEBITMargin    float64 `json:"adjusted_ebit_margin"`
+	AdjustedInvestedCap   float64 `json:"adjusted_invested_cap"`
+	AdjustedROIC          float64 `json:"adjusted_roic"`
+	HasAdjustedROIC       bool    `json:"has_adjusted_roic"`
+	AvgAdjustedROIC       float64 `json:"avg_adjusted_roic"`
+	ROICDelta             float64 `json:"roic_delta"`
+	SurgingROIC           bool    `json:"surging_roic"`
+	OwnerEarnings         float64 `json:"owner_earnings"`
+	AdjustedOwnerEarnings float64 `json:"adjusted_owner_earnings"`
+	OwnerEarningsYield    float64 `json:"owner_earnings_yield"`
+	HasOwnerEarningsYield bool    `json:"has_owner_earnings_yield"`
+	ArbitrageScore        float64 `json:"arbitrage_score"`
+	ArbitrageSignal       string  `json:"arbitrage_signal"`
 }
 
 type ModernGAAPFilter struct {
@@ -93,236 +94,50 @@ func ScreenModernGAAPArbitrage(ctx context.Context, s *store.Store, tickers []st
 		companies = all
 	}
 
-	candidates := make([]ModernGAAPCandidate, 0)
+	type resultItem struct {
+		cand ModernGAAPCandidate
+		ok   bool
+	}
+
+	numWorkers := 8
+	jobs := make(chan store.LocalCompany, len(companies))
+	results := make(chan resultItem, len(companies))
+
+	var wg sync.WaitGroup
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for comp := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+				cand, ok := evaluateModernGAAPCompany(ctx, s, comp, filter, marketCaps, prices)
+				if ok {
+					results <- resultItem{cand: cand, ok: true}
+				}
+			}
+		}()
+	}
+
 	for _, company := range companies {
 		if ctx.Err() != nil {
+			close(jobs)
+			wg.Wait()
+			close(results)
 			return nil, ctx.Err()
 		}
+		jobs <- company
+	}
+	close(jobs)
+	wg.Wait()
+	close(results)
 
-		if !filter.IncludeFinancials && sectorFromSIC(company.SIC) == "Financials" {
-			continue
+	candidates := make([]ModernGAAPCandidate, 0)
+	for r := range results {
+		if r.ok {
+			candidates = append(candidates, r.cand)
 		}
-
-		summary, err := fundamentals.LoadFinancialSummary(ctx, s, filter.Years, company.Ticker)
-		if err != nil || len(summary.Periods) == 0 {
-			continue
-		}
-
-		currency := fundamentals.SummaryCurrency(summary)
-		if currency == "" {
-			currency = "USD"
-		}
-
-		revenueMetric := fundamentals.NamedMetric(summary, "Revenue")
-		if len(revenueMetric) == 0 || !revenueMetric[0].Present || revenueMetric[0].Value < filter.MinRevenue {
-			continue
-		}
-
-		intCapMetric := fundamentals.NamedMetric(summary, "Intangible Capital")
-		adjEBITMetric := fundamentals.NamedMetric(summary, "Adjusted Operating Income")
-		adjROICMetric := fundamentals.NamedMetric(summary, "Intangible-Adjusted ROIC")
-		amortMetric := fundamentals.NamedMetric(summary, "Amortization of Intangibles")
-
-		if len(intCapMetric) == 0 || !intCapMetric[0].Present || intCapMetric[0].Value <= 0 {
-			continue
-		}
-		if len(adjEBITMetric) == 0 || !adjEBITMetric[0].Present || adjEBITMetric[0].Value <= 0 {
-			continue
-		}
-
-		// Standard GAAP metrics
-		opIncomeMetric := fundamentals.NamedMetric(summary, "Operating Income")
-		netIncomeMetric := fundamentals.NamedMetric(summary, "Net Income")
-		equityMetric := fundamentals.NamedMetric(summary, "Stockholders' Equity")
-		debtMetric := fundamentals.NamedMetric(summary, "Debt / Borrowings")
-		cashMetric := fundamentals.NamedMetric(summary, "Cash & Equivalents")
-		taxMetric := fundamentals.NamedMetric(summary, "Income Tax Expense")
-		pretaxMetric := fundamentals.NamedMetric(summary, "Income Before Tax")
-
-		gaapRevenue := revenueMetric[0].Value
-		gaapOpIncome := 0.0
-		if len(opIncomeMetric) > 0 && opIncomeMetric[0].Present {
-			gaapOpIncome = opIncomeMetric[0].Value
-		}
-		gaapNetIncome := 0.0
-		if len(netIncomeMetric) > 0 && netIncomeMetric[0].Present {
-			gaapNetIncome = netIncomeMetric[0].Value
-		}
-		gaapOpMargin := gaapOpIncome / gaapRevenue
-		gaapUnprofitable := gaapNetIncome <= 0 || gaapOpIncome <= 0
-
-		gaapROIC, hasGAAPROIC := averageROIC(opIncomeMetric, equityMetric, debtMetric, cashMetric, taxMetric, pretaxMetric, 1)
-		if !hasGAAPROIC && len(summary.Periods) > 1 {
-			gaapROIC, hasGAAPROIC = averageROIC(opIncomeMetric, equityMetric, debtMetric, cashMetric, taxMetric, pretaxMetric, min(3, len(summary.Periods)-1))
-		}
-
-		// Intangible-Adjusted metrics
-		latestIntCap := intCapMetric[0].Value
-		latestAdjEBIT := adjEBITMetric[0].Value
-		latestAdjEBITMargin := latestAdjEBIT / gaapRevenue
-
-		adjInvestedCapMetric := fundamentals.NamedMetric(summary, "Adjusted Invested Capital")
-		latestAdjInvestedCap := 0.0
-		if len(adjInvestedCapMetric) > 0 && adjInvestedCapMetric[0].Present {
-			latestAdjInvestedCap = adjInvestedCapMetric[0].Value
-		}
-
-		latestAdjROIC := 0.0
-		hasAdjROIC := false
-		if len(adjROICMetric) > 0 && adjROICMetric[0].Present {
-			latestAdjROIC = adjROICMetric[0].Value
-			hasAdjROIC = true
-		}
-
-		var validAdjROIC []float64
-		for i := 0; i < len(adjROICMetric) && i < filter.Years; i++ {
-			if adjROICMetric[i].Present && finite(adjROICMetric[i].Value) {
-				validAdjROIC = append(validAdjROIC, adjROICMetric[i].Value)
-			}
-		}
-		avgAdjROIC := latestAdjROIC
-		if len(validAdjROIC) > 0 {
-			avgAdjROIC = mean(validAdjROIC)
-		}
-
-		roicDelta := 0.0
-		if hasAdjROIC && hasGAAPROIC {
-			roicDelta = latestAdjROIC - gaapROIC
-		}
-
-		surging := false
-		if hasAdjROIC {
-			if len(adjROICMetric) > 1 && adjROICMetric[1].Present && latestAdjROIC > adjROICMetric[1].Value {
-				surging = true
-			} else if latestAdjROIC >= avgAdjROIC && latestAdjROIC >= 0.15 {
-				surging = true
-			} else if roicDelta >= 0.05 {
-				surging = true
-			}
-		}
-
-		// Market Valuation
-		marketCap := ResolveMarketCap(s, ctx, summary, summary.Ticker, marketCaps, prices)
-		hasMarketCap := marketCap > 0
-		gaapPE := 0.0
-		hasGAAP_PE := false
-		if hasMarketCap && gaapNetIncome > 0 {
-			gaapPE = marketCap / gaapNetIncome
-			hasGAAP_PE = true
-		}
-
-		// Owner Earnings & Adjusted Owner Earnings
-		ownerMetric := fundamentals.NamedMetric(summary, "SBC-Adjusted FCF Proxy")
-		fcfMetric := fundamentals.NamedMetric(summary, "Free Cash Flow")
-		rdMetric := fundamentals.NamedMetric(summary, "Research & Development")
-		sgaMetric := fundamentals.NamedMetric(summary, "Selling, General & Administrative")
-
-		ownerBase := 0.0
-		hasOwner := false
-		if len(ownerMetric) > 0 && ownerMetric[0].Present {
-			ownerBase = ownerMetric[0].Value
-			hasOwner = true
-		} else if len(fcfMetric) > 0 && fcfMetric[0].Present {
-			ownerBase = fcfMetric[0].Value
-			hasOwner = true
-		}
-
-		currentRD := 0.0
-		if len(rdMetric) > 0 && rdMetric[0].Present {
-			currentRD = math.Abs(rdMetric[0].Value)
-		}
-		currentSGA := 0.0
-		if len(sgaMetric) > 0 && sgaMetric[0].Present {
-			currentSGA = math.Abs(sgaMetric[0].Value)
-		}
-		currentAmort := 0.0
-		if len(amortMetric) > 0 && amortMetric[0].Present {
-			currentAmort = amortMetric[0].Value
-		}
-
-		growthIntangible := math.Max(0, (currentRD+0.30*currentSGA)-currentAmort)
-		adjustedOwnerEarnings := ownerBase + growthIntangible
-
-		ownerEarningsYield := 0.0
-		hasYield := false
-		if hasMarketCap && hasOwner {
-			ownerEarningsYield = adjustedOwnerEarnings / marketCap
-			hasYield = true
-		}
-
-		// Filter Gates
-		if filter.MinAdjustedROIC > 0 && (!hasAdjROIC || latestAdjROIC < filter.MinAdjustedROIC) {
-			continue
-		}
-		if filter.MinOwnerYield > 0 && (!hasYield || ownerEarningsYield < filter.MinOwnerYield) {
-			continue
-		}
-		if filter.RequireSurging && !surging {
-			continue
-		}
-		if filter.MaxGAAPROIC > 0 && hasGAAPROIC && gaapROIC > filter.MaxGAAPROIC {
-			continue
-		}
-		if filter.RequireGAAPExpensive {
-			isExpensive := gaapUnprofitable || (hasGAAP_PE && gaapPE >= 25.0) || (hasGAAPROIC && gaapROIC < 0.15) || (roicDelta >= 0.05)
-			if !isExpensive {
-				continue
-			}
-		}
-
-		// Arbitrage Signal Classification
-		signal := "Capitalized Intangible Moat"
-		switch {
-		case gaapNetIncome <= 0 && latestAdjEBIT > 0:
-			signal = "GAAP Loss → Economic Profit"
-		case hasGAAP_PE && gaapPE >= 35.0 && latestAdjROIC >= 0.20:
-			signal = "Severe GAAP P/E Distortion"
-		case hasGAAPROIC && roicDelta >= 0.10:
-			signal = "Surging ROIC Arbitrage"
-		case surging && latestAdjROIC >= 0.20:
-			signal = "Surging ROIC Compounder"
-		}
-
-		score := (latestAdjROIC * 100 * 0.40) + (math.Max(0, roicDelta) * 100 * 0.20)
-		if hasYield {
-			score += (math.Max(0, ownerEarningsYield) * 100 * 0.40 * 5)
-		} else {
-			score += (latestAdjROIC * 100 * 0.40)
-		}
-
-		candidates = append(candidates, ModernGAAPCandidate{
-			Ticker:                company.Ticker,
-			Company:               company.Name,
-			SIC:                   company.SIC,
-			SICDescription:        company.SICDescription,
-			Currency:              currency,
-			MarketCap:             marketCap,
-			HasMarketCap:          hasMarketCap,
-			GAAPRevenue:           gaapRevenue,
-			GAAPNetIncome:         gaapNetIncome,
-			GAAPOperatingIncome:   gaapOpIncome,
-			GAAPOperatingMargin:   gaapOpMargin,
-			GAAPROIC:              gaapROIC,
-			HasGAAPROIC:           hasGAAPROIC,
-			GAAP_PE:               gaapPE,
-			HasGAAP_PE:            hasGAAP_PE,
-			GAAPUnprofitable:      gaapUnprofitable,
-			IntangibleCapital:     latestIntCap,
-			AdjustedEBIT:          latestAdjEBIT,
-			AdjustedEBITMargin:    latestAdjEBITMargin,
-			AdjustedInvestedCap:   latestAdjInvestedCap,
-			AdjustedROIC:          latestAdjROIC,
-			HasAdjustedROIC:       hasAdjROIC,
-			AvgAdjustedROIC:       avgAdjROIC,
-			ROICDelta:             roicDelta,
-			SurgingROIC:           surging,
-			OwnerEarnings:         ownerBase,
-			AdjustedOwnerEarnings: adjustedOwnerEarnings,
-			OwnerEarningsYield:    ownerEarningsYield,
-			HasOwnerEarningsYield: hasYield,
-			ArbitrageScore:        score,
-			ArbitrageSignal:       signal,
-		})
 	}
 
 	// Sort candidates
@@ -360,6 +175,234 @@ func ScreenModernGAAPArbitrage(ctx context.Context, s *store.Store, tickers []st
 	}
 
 	return candidates, nil
+}
+
+func evaluateModernGAAPCompany(ctx context.Context, s *store.Store, company store.LocalCompany, filter ModernGAAPFilter, marketCaps, prices map[string]float64) (ModernGAAPCandidate, bool) {
+	var zero ModernGAAPCandidate
+	if !filter.IncludeFinancials && sectorFromSIC(company.SIC) == "Financials" {
+		return zero, false
+	}
+
+	summary, err := fundamentals.LoadFinancialSummary(ctx, s, filter.Years, company.Ticker)
+	if err != nil || len(summary.Periods) == 0 {
+		return zero, false
+	}
+
+	currency := fundamentals.SummaryCurrency(summary)
+	if currency == "" {
+		currency = "USD"
+	}
+
+	revenueMetric := fundamentals.NamedMetric(summary, "Revenue")
+	if len(revenueMetric) == 0 || !revenueMetric[0].Present || revenueMetric[0].Value < filter.MinRevenue {
+		return zero, false
+	}
+
+	intCapMetric := fundamentals.NamedMetric(summary, "Intangible Capital")
+	adjEBITMetric := fundamentals.NamedMetric(summary, "Adjusted Operating Income")
+	adjROICMetric := fundamentals.NamedMetric(summary, "Intangible-Adjusted ROIC")
+	amortMetric := fundamentals.NamedMetric(summary, "Amortization of Intangibles")
+
+	if len(intCapMetric) == 0 || !intCapMetric[0].Present || intCapMetric[0].Value <= 0 {
+		return zero, false
+	}
+	if len(adjEBITMetric) == 0 || !adjEBITMetric[0].Present || adjEBITMetric[0].Value <= 0 {
+		return zero, false
+	}
+
+	// Standard GAAP metrics
+	opIncomeMetric := fundamentals.NamedMetric(summary, "Operating Income")
+	netIncomeMetric := fundamentals.NamedMetric(summary, "Net Income")
+	equityMetric := fundamentals.NamedMetric(summary, "Stockholders' Equity")
+	debtMetric := fundamentals.NamedMetric(summary, "Debt / Borrowings")
+	cashMetric := fundamentals.NamedMetric(summary, "Cash & Equivalents")
+	taxMetric := fundamentals.NamedMetric(summary, "Income Tax Expense")
+	pretaxMetric := fundamentals.NamedMetric(summary, "Income Before Tax")
+
+	gaapRevenue := revenueMetric[0].Value
+	gaapOpIncome := 0.0
+	if len(opIncomeMetric) > 0 && opIncomeMetric[0].Present {
+		gaapOpIncome = opIncomeMetric[0].Value
+	}
+	gaapNetIncome := 0.0
+	if len(netIncomeMetric) > 0 && netIncomeMetric[0].Present {
+		gaapNetIncome = netIncomeMetric[0].Value
+	}
+	gaapOpMargin := gaapOpIncome / gaapRevenue
+	gaapUnprofitable := gaapNetIncome <= 0 || gaapOpIncome <= 0
+
+	gaapROIC, hasGAAPROIC := averageROIC(opIncomeMetric, equityMetric, debtMetric, cashMetric, taxMetric, pretaxMetric, 1)
+	if !hasGAAPROIC && len(summary.Periods) > 1 {
+		gaapROIC, hasGAAPROIC = averageROIC(opIncomeMetric, equityMetric, debtMetric, cashMetric, taxMetric, pretaxMetric, min(3, len(summary.Periods)-1))
+	}
+
+	// Intangible-Adjusted metrics
+	latestIntCap := intCapMetric[0].Value
+	latestAdjEBIT := adjEBITMetric[0].Value
+	latestAdjEBITMargin := latestAdjEBIT / gaapRevenue
+
+	adjInvestedCapMetric := fundamentals.NamedMetric(summary, "Adjusted Invested Capital")
+	latestAdjInvestedCap := 0.0
+	if len(adjInvestedCapMetric) > 0 && adjInvestedCapMetric[0].Present {
+		latestAdjInvestedCap = adjInvestedCapMetric[0].Value
+	}
+
+	latestAdjROIC := 0.0
+	hasAdjROIC := false
+	if len(adjROICMetric) > 0 && adjROICMetric[0].Present {
+		latestAdjROIC = adjROICMetric[0].Value
+		hasAdjROIC = true
+	}
+
+	var validAdjROIC []float64
+	for i := 0; i < len(adjROICMetric) && i < filter.Years; i++ {
+		if adjROICMetric[i].Present && finite(adjROICMetric[i].Value) {
+			validAdjROIC = append(validAdjROIC, adjROICMetric[i].Value)
+		}
+	}
+	avgAdjROIC := latestAdjROIC
+	if len(validAdjROIC) > 0 {
+		avgAdjROIC = mean(validAdjROIC)
+	}
+
+	roicDelta := 0.0
+	if hasAdjROIC && hasGAAPROIC {
+		roicDelta = latestAdjROIC - gaapROIC
+	}
+
+	surging := false
+	if hasAdjROIC {
+		if len(adjROICMetric) > 1 && adjROICMetric[1].Present && latestAdjROIC > adjROICMetric[1].Value {
+			surging = true
+		} else if latestAdjROIC >= avgAdjROIC && latestAdjROIC >= 0.15 {
+			surging = true
+		} else if roicDelta >= 0.05 {
+			surging = true
+		}
+	}
+
+	// Market Valuation
+	marketCap := ResolveMarketCap(s, ctx, summary, summary.Ticker, marketCaps, prices)
+	hasMarketCap := marketCap > 0
+	gaapPE := 0.0
+	hasGAAP_PE := false
+	if hasMarketCap && gaapNetIncome > 0 {
+		gaapPE = marketCap / gaapNetIncome
+		hasGAAP_PE = true
+	}
+
+	// Owner Earnings & Adjusted Owner Earnings
+	ownerMetric := fundamentals.NamedMetric(summary, "SBC-Adjusted FCF Proxy")
+	fcfMetric := fundamentals.NamedMetric(summary, "Free Cash Flow")
+	rdMetric := fundamentals.NamedMetric(summary, "Research & Development")
+	sgaMetric := fundamentals.NamedMetric(summary, "Selling, General & Administrative")
+
+	ownerBase := 0.0
+	hasOwner := false
+	if len(ownerMetric) > 0 && ownerMetric[0].Present {
+		ownerBase = ownerMetric[0].Value
+		hasOwner = true
+	} else if len(fcfMetric) > 0 && fcfMetric[0].Present {
+		ownerBase = fcfMetric[0].Value
+		hasOwner = true
+	}
+
+	currentRD := 0.0
+	if len(rdMetric) > 0 && rdMetric[0].Present {
+		currentRD = math.Abs(rdMetric[0].Value)
+	}
+	currentSGA := 0.0
+	if len(sgaMetric) > 0 && sgaMetric[0].Present {
+		currentSGA = math.Abs(sgaMetric[0].Value)
+	}
+	currentAmort := 0.0
+	if len(amortMetric) > 0 && amortMetric[0].Present {
+		currentAmort = amortMetric[0].Value
+	}
+
+	growthIntangible := math.Max(0, (currentRD+0.30*currentSGA)-currentAmort)
+	adjustedOwnerEarnings := ownerBase + growthIntangible
+
+	ownerEarningsYield := 0.0
+	hasYield := false
+	if hasMarketCap && hasOwner {
+		ownerEarningsYield = adjustedOwnerEarnings / marketCap
+		hasYield = true
+	}
+
+	// Filter Gates
+	if filter.MinAdjustedROIC > 0 && (!hasAdjROIC || latestAdjROIC < filter.MinAdjustedROIC) {
+		return zero, false
+	}
+	if filter.MinOwnerYield > 0 && (!hasYield || ownerEarningsYield < filter.MinOwnerYield) {
+		return zero, false
+	}
+	if filter.RequireSurging && !surging {
+		return zero, false
+	}
+	if filter.MaxGAAPROIC > 0 && hasGAAPROIC && gaapROIC > filter.MaxGAAPROIC {
+		return zero, false
+	}
+	if filter.RequireGAAPExpensive {
+		isExpensive := gaapUnprofitable || (hasGAAP_PE && gaapPE >= 25.0) || (hasGAAPROIC && gaapROIC < 0.15) || (roicDelta >= 0.05)
+		if !isExpensive {
+			return zero, false
+		}
+	}
+
+	// Arbitrage Signal Classification
+	signal := "Capitalized Intangible Moat"
+	switch {
+	case gaapNetIncome <= 0 && latestAdjEBIT > 0:
+		signal = "GAAP Loss → Economic Profit"
+	case hasGAAP_PE && gaapPE >= 35.0 && latestAdjROIC >= 0.20:
+		signal = "Severe GAAP P/E Distortion"
+	case hasGAAPROIC && roicDelta >= 0.10:
+		signal = "Surging ROIC Arbitrage"
+	case surging && latestAdjROIC >= 0.20:
+		signal = "Surging ROIC Compounder"
+	}
+
+	score := (latestAdjROIC * 100 * 0.40) + (math.Max(0, roicDelta) * 100 * 0.20)
+	if hasYield {
+		score += (math.Max(0, ownerEarningsYield) * 100 * 0.40 * 5)
+	} else {
+		score += (latestAdjROIC * 100 * 0.40)
+	}
+
+	return ModernGAAPCandidate{
+		Ticker:                company.Ticker,
+		Company:               company.Name,
+		SIC:                   company.SIC,
+		SICDescription:        company.SICDescription,
+		Currency:              currency,
+		MarketCap:             marketCap,
+		HasMarketCap:          hasMarketCap,
+		GAAPRevenue:           gaapRevenue,
+		GAAPNetIncome:         gaapNetIncome,
+		GAAPOperatingIncome:   gaapOpIncome,
+		GAAPOperatingMargin:   gaapOpMargin,
+		GAAPROIC:              gaapROIC,
+		HasGAAPROIC:           hasGAAPROIC,
+		GAAP_PE:               gaapPE,
+		HasGAAP_PE:            hasGAAP_PE,
+		GAAPUnprofitable:      gaapUnprofitable,
+		IntangibleCapital:     latestIntCap,
+		AdjustedEBIT:          latestAdjEBIT,
+		AdjustedEBITMargin:    latestAdjEBITMargin,
+		AdjustedInvestedCap:   latestAdjInvestedCap,
+		AdjustedROIC:          latestAdjROIC,
+		HasAdjustedROIC:       hasAdjROIC,
+		AvgAdjustedROIC:       avgAdjROIC,
+		ROICDelta:             roicDelta,
+		SurgingROIC:           surging,
+		OwnerEarnings:         ownerBase,
+		AdjustedOwnerEarnings: adjustedOwnerEarnings,
+		OwnerEarningsYield:    ownerEarningsYield,
+		HasOwnerEarningsYield: hasYield,
+		ArbitrageScore:        score,
+		ArbitrageSignal:       signal,
+	}, true
 }
 
 // WriteModernGAAPTable prints the screening candidates in a formatted ASCII table.
