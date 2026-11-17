@@ -1,0 +1,16 @@
+Fundamental ranks: 485 eligible of 2000 synced companies
+Showing up to the top 5 eligible companies by composite score.
+Filters: latest revenue ≥ $100000000 and positive net income in the latest three years. Nonfinancial companies also need positive latest operating cash flow; solvency is checked when cash and debt facts are present.
+Factor percentiles use SEC SIC major groups; groups with fewer than five companies broaden to the SIC division. Financials and nonfinancials use separate score models and tables.
+SIC peer groups are a broad industry proxy, not GICS. Financial-company scores are preliminary; insurer combined ratios and investment-return metrics are not yet included.
+Sector classification is unavailable for 165 saved companies; sync them again to fetch SIC metadata. Eligible companies remain in the Unclassified peer tier.
+Financial companies — separate preliminary ranking
+RANK  TICKER  COMPANY                                        SIC PEER          SCORE  REVENUE  5Y ROE  5Y REV CAGR  5Y BV/SHARE CAGR  5Y EPS/SHARE CAGR  5Y SHARE RED.
+1     TBBK    Bancorp, Inc.                                  Financial SIC 60  92.3   $141.1M  24.2%   81.8%        8.4%              29.1%              20.5%
+2     ESQ     Esquire Financial Holdings, Inc.               Financial SIC 60  89.3   $139.4M  18.9%   29.3%        15.2%             28.9%              -13.3%
+1     IGIC    International General Insurance Holdings Ltd.  Financial SIC 63  89.8   $516.9M  20.3%   261.1%       17.6%             39.5%              11.8%
+1     STRW    Strawberry Fields REIT, Inc.                   Financial SIC 67  87.7   $155.0M  37.9%   15.5%        47.0%             102.6%             -14.3%*
+1     CRVL    CORVEL CORP                                    Financials        90.0   $958.5M  32.2%   11.6%        13.6%             20.2%              5.3%*
+Nonfinancial owner-earnings margin uses FCF less stock-based compensation where available (441 companies); 44 use reported FCF. This is a proxy, not a GAAP measure or market FCF yield.
+Solvency data is incomplete for 3 nonfinancial ranked companies; missing debt or cash was not treated as zero.
+Nonfinancial weights: 20% 5-year average ROIC, 15% revenue CAGR, 15% operating margin and positive-year consistency, 20% owner-earnings margin proxy, 10% net cash/assets, 10% EPS/share growth, 10% split-adjusted diluted-share reduction. Financial weights: 30% 5-year ROE, 20% revenue CAGR, 20% book value/share growth, 20% EPS/share growth, 10% split-adjusted diluted-share reduction. Missing factors are omitted and remaining weights are renormalized. No market valuation or FCF yield is included.

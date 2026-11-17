@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { ExternalLink, Search, FileText, Copy, Check, X, FileSearch, GitCompare } from 'lucide-react'
 import { FilingItem, RawFactItem, AuditResponse } from '../types'
 import { formatDate } from '../lib/format'
@@ -24,10 +24,13 @@ export const FilingsBrowser: React.FC<FilingsBrowserProps> = ({ ticker }) => {
   const [loadingAudit, setLoadingAudit] = useState(false)
   const [copiedAccession, setCopiedAccession] = useState(false)
   const [mainView, setMainView] = useState<'filings' | 'diff'>('filings')
+  const fetchedAuditTickerRef = useRef<string | null>(null)
 
   // Fetch filing list
   useEffect(() => {
     let ignore = false
+    fetchedAuditTickerRef.current = null
+    setAuditFacts([])
     const fetchFilings = async () => {
       setLoading(true)
       setError(null)
@@ -54,25 +57,28 @@ export const FilingsBrowser: React.FC<FilingsBrowserProps> = ({ ticker }) => {
 
   // Fetch raw facts for inspection when filing is selected
   useEffect(() => {
-    if (selectedFiling && auditFacts.length === 0 && !loadingAudit) {
+    if (selectedFiling && fetchedAuditTickerRef.current !== ticker) {
       let ignore = false
       setLoadingAudit(true)
       fetch(`/api/company/${ticker}/audit`)
         .then((res) => (res.ok ? res.json() : null))
         .then((data: AuditResponse | null) => {
-          if (!ignore && data?.raw_facts) {
-            setAuditFacts(data.raw_facts)
+          if (!ignore) {
+            fetchedAuditTickerRef.current = ticker
+            if (data?.raw_facts) {
+              setAuditFacts(data.raw_facts)
+            }
+            setLoadingAudit(false)
           }
         })
-        .catch(() => {})
-        .finally(() => {
+        .catch(() => {
           if (!ignore) setLoadingAudit(false)
         })
       return () => {
         ignore = true
       }
     }
-  }, [selectedFiling, auditFacts.length, loadingAudit, ticker])
+  }, [selectedFiling, ticker])
 
   const copyAccession = (acc: string) => {
     navigator.clipboard.writeText(acc)

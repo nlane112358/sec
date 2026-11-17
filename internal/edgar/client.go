@@ -70,6 +70,7 @@ type Client struct {
 type tickerEntry struct {
 	CIK    int    `json:"cik_str"`
 	Ticker string `json:"ticker"`
+	Title  string `json:"title"`
 }
 
 type tickerMapCache struct {

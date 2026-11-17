@@ -1,0 +1,298 @@
+=== Diagnostic Audit for Strawberry Fields REIT, Inc. (STRW) ===
+Latest Annual Period End: 2025-12-31
+
+METRIC                             STATUS   RESOLVED VALUE
+Revenue                            OK       155.00M USD
+Operating Income                   OK       84.29M USD
+Cost of Revenue                    MISSING  —
+Selling, General & Administrative  OK       8.61M USD
+Research & Development             MISSING  —
+Amortization of Intangibles        OK       1.85M USD
+Adjusted Operating Income          OK       85.02M USD
+Goodwill & Intangible Impairment   MISSING  —
+Net Income                         OK       7.58M USD
+Operating Cash Flow                OK       90.04M USD
+Capital Expenditure                OK       0.00 USD
+Depreciation & Amortization        OK       46.25M USD
+Free Cash Flow                     OK       90.04M USD
+Stock-Based Compensation           OK       1.69M USD
+SBC-Adjusted FCF Proxy             OK       88.35M USD
+Cash & Equivalents                 OK       31.81M USD
+Current Assets                     MISSING  —
+Accounts Receivable                MISSING  —
+Current Liabilities                MISSING  —
+Total Assets                       OK       885.23M USD
+Debt / Borrowings                  OK       794.65M USD
+Stockholders' Equity               OK       12.11M USD
+Intangible Capital                 OK       4.52M USD
+Adjusted Invested Capital          OK       779.46M USD
+Intangible-Adjusted ROIC           OK       8.6%
+Income Tax Expense                 MISSING  —
+Income Before Tax                  MISSING  —
+Interest Expense                   OK       50.95M USD
+Shares Outstanding                 OK       13.38M shares
+Diluted Weighted Average Shares    OK       12.70M shares
+
+--- Raw Tag Discovery for STRW (Period: 2025-12-31) ---
+Querying sec_facts for candidate concepts filed on or near this period:
+TAXONOMY  CONCEPT                                                                                                         FORM  VALUE            UNIT
+dei       EntityCommonStockSharesOutstanding                                                                              10-K  13.38M shares    shares
+dei       EntityPublicFloat                                                                                               10-K  139.68M USD      USD
+us-gaap   AccountsPayableAndAccruedLiabilitiesCurrentAndNoncurrent                                                        10-K  22.37M USD       USD
+us-gaap   AccountsPayableAndAccruedLiabilitiesCurrentAndNoncurrent                                                        10-Q  22.37M USD       USD
+us-gaap   AccountsPayableAndAccruedLiabilitiesCurrentAndNoncurrent                                                        10-Q  22.37M USD       USD
+us-gaap   AccountsPayableAndAccruedLiabilitiesCurrentAndNoncurrent                                                        10-Q  22.37M USD       USD
+us-gaap   AccumulatedOtherComprehensiveIncomeLossNetOfTax                                                                 10-K  -7.68M USD       USD
+us-gaap   AccumulatedOtherComprehensiveIncomeLossNetOfTax                                                                 10-Q  -7.68M USD       USD
+us-gaap   AccumulatedOtherComprehensiveIncomeLossNetOfTax                                                                 10-Q  -7.68M USD       USD
+us-gaap   AccumulatedOtherComprehensiveIncomeLossNetOfTax                                                                 10-Q  -7.68M USD       USD
+us-gaap   AdditionalPaidInCapital                                                                                         10-K  18.55M USD       USD
+us-gaap   AdditionalPaidInCapital                                                                                         10-Q  18.55M USD       USD
+us-gaap   AdditionalPaidInCapital                                                                                         10-Q  18.55M USD       USD
+us-gaap   AdditionalPaidInCapital                                                                                         10-Q  18.55M USD       USD
+us-gaap   AdjustmentForAmortization                                                                                       10-K  10.47M USD       USD
+us-gaap   AmortizationOfFinancingCostsAndDiscounts                                                                        10-K  804.00K USD      USD
+us-gaap   Assets                                                                                                          10-K  885.23M USD      USD
+us-gaap   Assets                                                                                                          10-Q  885.23M USD      USD
+us-gaap   Assets                                                                                                          10-Q  885.23M USD      USD
+us-gaap   Assets                                                                                                          10-Q  885.23M USD      USD
+us-gaap   CashAndCashEquivalentsAtCarryingValue                                                                           10-K  31.81M USD       USD
+us-gaap   CashAndCashEquivalentsAtCarryingValue                                                                           10-Q  31.81M USD       USD
+us-gaap   CashAndCashEquivalentsAtCarryingValue                                                                           10-Q  31.81M USD       USD
+us-gaap   CashAndCashEquivalentsAtCarryingValue                                                                           10-Q  31.81M USD       USD
+us-gaap   CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsIncludingDisposalGroupAndDiscontinuedOperations    10-K  66.76M USD       USD
+us-gaap   CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsIncludingDisposalGroupAndDiscontinuedOperations    10-Q  66.76M USD       USD
+us-gaap   CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsIncludingDisposalGroupAndDiscontinuedOperations    10-Q  66.76M USD       USD
+us-gaap   CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsIncludingDisposalGroupAndDiscontinuedOperations    10-Q  66.76M USD       USD
+us-gaap   CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect  10-K  -26.90M USD      USD
+us-gaap   CashUninsuredAmount                                                                                             10-K  53.10M USD       USD
+us-gaap   CashUninsuredAmount                                                                                             10-Q  53.10M USD       USD
+us-gaap   CashUninsuredAmount                                                                                             10-Q  53.10M USD       USD
+us-gaap   CashUninsuredAmount                                                                                             10-Q  53.10M USD       USD
+us-gaap   CommonStockParOrStatedValuePerShare                                                                             10-K  0.00 USD/shares  USD/shares
+us-gaap   CommonStockParOrStatedValuePerShare                                                                             10-Q  0.00 USD/shares  USD/shares
+us-gaap   CommonStockParOrStatedValuePerShare                                                                             10-Q  0.00 USD/shares  USD/shares
+us-gaap   CommonStockParOrStatedValuePerShare                                                                             10-Q  0.00 USD/shares  USD/shares
+us-gaap   CommonStockSharesAuthorized                                                                                     10-K  500.00M shares   shares
+us-gaap   CommonStockSharesAuthorized                                                                                     10-Q  500.00M shares   shares
+us-gaap   CommonStockSharesAuthorized                                                                                     10-Q  500.00M shares   shares
+us-gaap   CommonStockSharesAuthorized                                                                                     10-Q  500.00M shares   shares
+us-gaap   CommonStockSharesIssued                                                                                         10-K  13.26M shares    shares
+us-gaap   CommonStockSharesIssued                                                                                         10-Q  13.26M shares    shares
+us-gaap   CommonStockSharesIssued                                                                                         10-Q  13.26M shares    shares
+us-gaap   CommonStockSharesIssued                                                                                         10-Q  13.26M shares    shares
+us-gaap   CommonStockSharesOutstanding                                                                                    10-K  13.26M shares    shares
+us-gaap   CommonStockSharesOutstanding                                                                                    10-Q  13.26M shares    shares
+us-gaap   CommonStockSharesOutstanding                                                                                    10-Q  13.26M shares    shares
+us-gaap   CommonStockSharesOutstanding                                                                                    10-Q  13.26M shares    shares
+us-gaap   CommonStockValue                                                                                                10-K  1.00K USD        USD
+us-gaap   CommonStockValue                                                                                                10-Q  1.00K USD        USD
+us-gaap   CommonStockValue                                                                                                10-Q  1.00K USD        USD
+us-gaap   CommonStockValue                                                                                                10-Q  1.00K USD        USD
+us-gaap   ComprehensiveIncomeNetOfTax                                                                                     10-K  -447.00K USD     USD
+us-gaap   ComprehensiveIncomeNetOfTaxAttributableToNoncontrollingInterest                                                 10-K  -26.82M USD      USD
+us-gaap   DeferredCosts                                                                                                   10-K  5.36M USD        USD
+us-gaap   DeferredCosts                                                                                                   10-Q  5.36M USD        USD
+us-gaap   DeferredCosts                                                                                                   10-Q  5.36M USD        USD
+us-gaap   DeferredCosts                                                                                                   10-Q  5.36M USD        USD
+us-gaap   DeferredFinanceCostsNet                                                                                         10-K  4.15M USD        USD
+us-gaap   DeferredFinanceCostsNet                                                                                         10-Q  4.15M USD        USD
+us-gaap   DeferredFinanceCostsNet                                                                                         10-Q  4.15M USD        USD
+us-gaap   DeferredFinanceCostsNet                                                                                         10-Q  4.15M USD        USD
+us-gaap   DeferredRentReceivablesNet                                                                                      10-K  34.80M USD       USD
+us-gaap   DeferredRentReceivablesNet                                                                                      10-Q  34.80M USD       USD
+us-gaap   DeferredRentReceivablesNet                                                                                      10-Q  34.80M USD       USD
+us-gaap   DeferredRentReceivablesNet                                                                                      10-Q  34.80M USD       USD
+us-gaap   Depreciation                                                                                                    10-K  35.77M USD       USD
+us-gaap   DepreciationAndAmortization                                                                                     10-K  46.25M USD       USD
+us-gaap   Dividends                                                                                                       10-K  7.63M USD        USD
+us-gaap   EarningsPerShareBasic                                                                                           10-K  0.60 USD/shares  USD/shares
+us-gaap   EarningsPerShareDiluted                                                                                         10-K  0.60 USD/shares  USD/shares
+us-gaap   EmployeeBenefitsAndShareBasedCompensation                                                                       10-K  1.50M USD        USD
+us-gaap   FinancingInterestExpense                                                                                        10-K  50.15M USD       USD
+us-gaap   FiniteLivedIntangibleAssetsAccumulatedAmortization                                                              10-K  -62.43M USD      USD
+us-gaap   FiniteLivedIntangibleAssetsAccumulatedAmortization                                                              10-Q  -62.43M USD      USD
+us-gaap   FiniteLivedIntangibleAssetsAccumulatedAmortization                                                              10-Q  -62.43M USD      USD
+us-gaap   FiniteLivedIntangibleAssetsAccumulatedAmortization                                                              10-Q  -62.43M USD      USD
+us-gaap   FiniteLivedIntangibleAssetsNet                                                                                  10-K  68.35M USD       USD
+us-gaap   FiniteLivedIntangibleAssetsNet                                                                                  10-Q  68.35M USD       USD
+us-gaap   FiniteLivedIntangibleAssetsNet                                                                                  10-Q  68.35M USD       USD
+us-gaap   FiniteLivedIntangibleAssetsNet                                                                                  10-Q  68.35M USD       USD
+us-gaap   ForeignCurrencyTransactionGainLossAfterTax                                                                      10-K  -3.17M USD       USD
+us-gaap   GeneralAndAdministrativeExpense                                                                                 10-K  8.61M USD        USD
+us-gaap   IncreaseDecreaseInAccountsPayableAndAccruedLiabilities                                                          10-K  9.46M USD        USD
+us-gaap   IncreaseDecreaseInOtherOperatingAssets                                                                          10-K  98.00K USD       USD
+us-gaap   IncreaseDecreaseInReceivables                                                                                   10-K  7.10M USD        USD
+us-gaap   IntangibleAssetsNetIncludingGoodwill                                                                            10-K  68.35M USD       USD
+us-gaap   IntangibleAssetsNetIncludingGoodwill                                                                            10-Q  68.35M USD       USD
+us-gaap   IntangibleAssetsNetIncludingGoodwill                                                                            10-Q  68.35M USD       USD
+us-gaap   IntangibleAssetsNetIncludingGoodwill                                                                            10-Q  68.35M USD       USD
+us-gaap   InterestExpense                                                                                                 10-K  50.95M USD       USD
+us-gaap   InterestExpenseDebt                                                                                             10-K  48.61M USD       USD
+us-gaap   InterestExpenseLongTermDebt                                                                                     10-K  27.85M USD       USD
+us-gaap   InterestExpenseOther                                                                                            10-K  48.61M USD       USD
+us-gaap   InterestPaidNet                                                                                                 10-K  47.72M USD       USD
+us-gaap   LesseeOperatingLeaseLiabilityPaymentsDue                                                                        10-K  894.00K USD      USD
+us-gaap   LesseeOperatingLeaseLiabilityPaymentsDueNextTwelveMonths                                                        10-K  397.00K USD      USD
+us-gaap   LesseeOperatingLeaseLiabilityPaymentsDueYearThree                                                               10-K  100.00K USD      USD
+us-gaap   LesseeOperatingLeaseLiabilityPaymentsDueYearTwo                                                                 10-K  397.00K USD      USD
+us-gaap   LesseeOperatingLeaseLiabilityUndiscountedExcessAmount                                                           10-K  43.00K USD       USD
+us-gaap   LessorOperatingLeasePaymentsToBeReceived                                                                        10-K  1.06B USD        USD
+us-gaap   LessorOperatingLeasePaymentsToBeReceivedFiveYears                                                               10-K  131.59M USD      USD
+us-gaap   LessorOperatingLeasePaymentsToBeReceivedFourYears                                                               10-K  130.57M USD      USD
+us-gaap   LessorOperatingLeasePaymentsToBeReceivedNextTwelveMonths                                                        10-K  134.75M USD      USD
+us-gaap   LessorOperatingLeasePaymentsToBeReceivedThereafter                                                              10-K  388.67M USD      USD
+us-gaap   LessorOperatingLeasePaymentsToBeReceivedThreeYears                                                              10-K  136.37M USD      USD
+us-gaap   LessorOperatingLeasePaymentsToBeReceivedTwoYears                                                                10-K  138.14M USD      USD
+us-gaap   Liabilities                                                                                                     10-K  834.70M USD      USD
+us-gaap   Liabilities                                                                                                     10-Q  834.70M USD      USD
+us-gaap   Liabilities                                                                                                     10-Q  834.70M USD      USD
+us-gaap   Liabilities                                                                                                     10-Q  834.70M USD      USD
+us-gaap   LiabilitiesAndStockholdersEquity                                                                                10-K  885.23M USD      USD
+us-gaap   LiabilitiesAndStockholdersEquity                                                                                10-Q  885.23M USD      USD
+us-gaap   LiabilitiesAndStockholdersEquity                                                                                10-Q  885.23M USD      USD
+us-gaap   LiabilitiesAndStockholdersEquity                                                                                10-Q  885.23M USD      USD
+us-gaap   LongTermDebt                                                                                                    10-K  794.65M USD      USD
+us-gaap   LongTermDebtMaturitiesRepaymentsOfPrincipalAfterYearFive                                                        10-K  209.60M USD      USD
+us-gaap   LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths                                                   10-K  258.88M USD      USD
+us-gaap   LongTermDebtMaturitiesRepaymentsOfPrincipalInYearFive                                                           10-K  9.48M USD        USD
+us-gaap   LongTermDebtMaturitiesRepaymentsOfPrincipalInYearFour                                                           10-K  169.99M USD      USD
+us-gaap   LongTermDebtMaturitiesRepaymentsOfPrincipalInYearThree                                                          10-K  63.41M USD       USD
+us-gaap   LongTermDebtMaturitiesRepaymentsOfPrincipalInYearTwo                                                            10-K  83.29M USD       USD
+us-gaap   LossOnSaleOfInvestments                                                                                         10-K  12.00K USD       USD
+us-gaap   MinorityInterest                                                                                                10-K  38.42M USD       USD
+us-gaap   MinorityInterest                                                                                                10-Q  38.42M USD       USD
+us-gaap   MinorityInterest                                                                                                10-Q  38.42M USD       USD
+us-gaap   MinorityInterest                                                                                                10-Q  38.42M USD       USD
+us-gaap   MinorityInterestDecreaseFromDistributionsToNoncontrollingInterestHolders                                        10-K  25.60M USD       USD
+us-gaap   NetCashProvidedByUsedInFinancingActivities                                                                      10-K  -5.06M USD       USD
+us-gaap   NetCashProvidedByUsedInInvestingActivities                                                                      10-K  -111.87M USD     USD
+us-gaap   NetCashProvidedByUsedInOperatingActivities                                                                      10-K  90.04M USD       USD
+us-gaap   NetIncomeLoss                                                                                                   10-K  7.58M USD        USD
+us-gaap   NetIncomeLossAttributableToNoncontrollingInterest                                                               10-K  25.73M USD       USD
+us-gaap   NonoperatingIncomeExpense                                                                                       10-K  -28.00K USD      USD
+us-gaap   NotesAssumed1                                                                                                   10-K  2.40M USD        USD
+us-gaap   NotesPayable                                                                                                    10-K  790.50M USD      USD
+us-gaap   NotesPayable                                                                                                    10-Q  790.50M USD      USD
+us-gaap   NotesPayable                                                                                                    10-Q  790.50M USD      USD
+us-gaap   NotesReceivableNet                                                                                              10-K  20.82M USD       USD
+us-gaap   NotesReceivableNet                                                                                              10-Q  20.82M USD       USD
+us-gaap   NotesReceivableNet                                                                                              10-Q  20.82M USD       USD
+us-gaap   NotesReceivableNet                                                                                              10-Q  20.82M USD       USD
+us-gaap   OperatingExpenses                                                                                               10-K  70.71M USD       USD
+us-gaap   OperatingIncomeLoss                                                                                             10-K  84.29M USD       USD
+us-gaap   OperatingLeaseCost                                                                                              10-K  397.00K USD      USD
+us-gaap   OperatingLeaseLiability                                                                                         10-K  851.00K USD      USD
+us-gaap   OperatingLeaseLiability                                                                                         10-Q  851.00K USD      USD
+us-gaap   OperatingLeaseLiability                                                                                         10-Q  851.00K USD      USD
+us-gaap   OperatingLeaseLiability                                                                                         10-Q  851.00K USD      USD
+us-gaap   OperatingLeaseLiabilityCurrent                                                                                  10-K  851.00K USD      USD
+us-gaap   OperatingLeasePayments                                                                                          10-K  353.00K USD      USD
+us-gaap   OperatingLeaseRightOfUseAsset                                                                                   10-K  851.00K USD      USD
+us-gaap   OperatingLeaseRightOfUseAsset                                                                                   10-Q  851.00K USD      USD
+us-gaap   OperatingLeaseRightOfUseAsset                                                                                   10-Q  851.00K USD      USD
+us-gaap   OperatingLeaseRightOfUseAsset                                                                                   10-Q  851.00K USD      USD
+us-gaap   OperatingLeaseRightOfUseAssetAmortizationExpense                                                                10-K  353.00K USD      USD
+us-gaap   OperatingLeaseWeightedAverageDiscountRatePercent                                                                10-K  0.04 pure        pure
+us-gaap   OperatingLeaseWeightedAverageDiscountRatePercent                                                                10-Q  0.04 pure        pure
+us-gaap   OperatingLeaseWeightedAverageDiscountRatePercent                                                                10-Q  0.04 pure        pure
+us-gaap   OperatingLeaseWeightedAverageDiscountRatePercent                                                                10-Q  0.04 pure        pure
+us-gaap   OtherAssets                                                                                                     10-K  1.13M USD        USD
+us-gaap   OtherAssets                                                                                                     10-Q  1.13M USD        USD
+us-gaap   OtherAssets                                                                                                     10-Q  1.13M USD        USD
+us-gaap   OtherAssets                                                                                                     10-Q  1.13M USD        USD
+us-gaap   OtherComprehensiveIncomeForeignCurrencyTransactionAndTranslationGainLossArisingDuringPeriodNetOfTax             10-K  -34.84M USD      USD
+us-gaap   OtherComprehensiveIncomeLossForeignCurrencyTransactionAndTranslationAdjustmentNetOfTax                          10-K  -34.84M USD      USD
+us-gaap   OtherFiniteLivedIntangibleAssetsGross                                                                           10-K  130.78M USD      USD
+us-gaap   OtherFiniteLivedIntangibleAssetsGross                                                                           10-Q  130.78M USD      USD
+us-gaap   OtherFiniteLivedIntangibleAssetsGross                                                                           10-Q  130.78M USD      USD
+us-gaap   OtherFiniteLivedIntangibleAssetsGross                                                                           10-Q  130.78M USD      USD
+us-gaap   OtherLiabilities                                                                                                10-K  20.98M USD       USD
+us-gaap   OtherLiabilities                                                                                                10-Q  20.98M USD       USD
+us-gaap   OtherLiabilities                                                                                                10-Q  20.98M USD       USD
+us-gaap   OtherLiabilities                                                                                                10-Q  20.98M USD       USD
+us-gaap   OtherNonoperatingIncomeExpense                                                                                  10-K  -28.00K USD      USD
+us-gaap   PaymentsForRent                                                                                                 10-K  218.00K USD      USD
+us-gaap   PaymentsForRepurchaseOfCommonStock                                                                              10-K  652.00K USD      USD
+us-gaap   PaymentsOfDividendsMinorityInterest                                                                             10-K  25.60M USD       USD
+us-gaap   PaymentsToAcquireRealEstateHeldForInvestment                                                                    10-K  110.04M USD      USD
+us-gaap   PreferredStockParOrStatedValuePerShare                                                                          10-K  0.00 USD/shares  USD/shares
+us-gaap   PreferredStockParOrStatedValuePerShare                                                                          10-Q  0.00 USD/shares  USD/shares
+us-gaap   PreferredStockParOrStatedValuePerShare                                                                          10-Q  0.00 USD/shares  USD/shares
+us-gaap   PreferredStockParOrStatedValuePerShare                                                                          10-Q  0.00 USD/shares  USD/shares
+us-gaap   PreferredStockSharesAuthorized                                                                                  10-K  100.00M shares   shares
+us-gaap   PreferredStockSharesAuthorized                                                                                  10-Q  100.00M shares   shares
+us-gaap   PreferredStockSharesAuthorized                                                                                  10-Q  100.00M shares   shares
+us-gaap   PreferredStockSharesAuthorized                                                                                  10-Q  100.00M shares   shares
+us-gaap   PreferredStockSharesIssued                                                                                      10-K  0.00 shares      shares
+us-gaap   PreferredStockSharesIssued                                                                                      10-Q  0.00 shares      shares
+us-gaap   PreferredStockSharesIssued                                                                                      10-Q  0.00 shares      shares
+us-gaap   PreferredStockSharesIssued                                                                                      10-Q  0.00 shares      shares
+us-gaap   PreferredStockSharesOutstanding                                                                                 10-K  0.00 shares      shares
+us-gaap   PreferredStockSharesOutstanding                                                                                 10-Q  0.00 shares      shares
+us-gaap   PreferredStockSharesOutstanding                                                                                 10-Q  0.00 shares      shares
+us-gaap   PreferredStockSharesOutstanding                                                                                 10-Q  0.00 shares      shares
+us-gaap   ProceedsFromIssuanceOrSaleOfEquity                                                                              10-K  2.32M USD        USD
+us-gaap   ProceedsFromRentsReceived                                                                                       10-K  70.02M USD       USD
+us-gaap   ProfitLoss                                                                                                      10-K  33.31M USD       USD
+us-gaap   RealEstateAccumulatedDepreciation                                                                               10-K  282.06M USD      USD
+us-gaap   RealEstateAccumulatedDepreciationOtherDeductions                                                                10-K  -2.14M USD       USD
+us-gaap   RealEstateAndAccumulatedDepreciationCarryingAmountOfBuildingsAndImprovements                                    10-K  801.76M USD      USD
+us-gaap   RealEstateAndAccumulatedDepreciationCarryingAmountOfLand                                                        10-K  72.59M USD       USD
+us-gaap   RealEstateAndAccumulatedDepreciationInitialCostOfBuildingsAndImprovements                                       10-K  797.51M USD      USD
+us-gaap   RealEstateAndAccumulatedDepreciationInitialCostOfLand                                                           10-K  72.59M USD       USD
+us-gaap   RealEstateGrossAtCarryingValue                                                                                  10-K  969.21M USD      USD
+us-gaap   RealEstateInvestmentPropertyAccumulatedDepreciation                                                             10-K  282.06M USD      USD
+us-gaap   RealEstateInvestmentPropertyAccumulatedDepreciation                                                             10-Q  282.06M USD      USD
+us-gaap   RealEstateInvestmentPropertyAccumulatedDepreciation                                                             10-Q  282.06M USD      USD
+us-gaap   RealEstateInvestmentPropertyAccumulatedDepreciation                                                             10-Q  282.06M USD      USD
+us-gaap   RealEstateInvestmentPropertyAtCost                                                                              10-K  969.21M USD      USD
+us-gaap   RealEstateInvestmentPropertyAtCost                                                                              10-Q  969.21M USD      USD
+us-gaap   RealEstateInvestmentPropertyAtCost                                                                              10-Q  969.21M USD      USD
+us-gaap   RealEstateInvestmentPropertyAtCost                                                                              10-Q  969.21M USD      USD
+us-gaap   RealEstateInvestmentPropertyNet                                                                                 10-K  687.15M USD      USD
+us-gaap   RealEstateInvestmentPropertyNet                                                                                 10-Q  687.15M USD      USD
+us-gaap   RealEstateInvestmentPropertyNet                                                                                 10-Q  687.15M USD      USD
+us-gaap   RealEstateInvestmentPropertyNet                                                                                 10-Q  687.15M USD      USD
+us-gaap   RealEstateInvestments                                                                                           10-K  687.15M USD      USD
+us-gaap   RealEstateInvestments                                                                                           10-Q  687.15M USD      USD
+us-gaap   RealEstateInvestments                                                                                           10-Q  687.15M USD      USD
+us-gaap   RealEstateInvestments                                                                                           10-Q  687.15M USD      USD
+us-gaap   RealEstateOtherAcquisitions                                                                                     10-K  112.18M USD      USD
+us-gaap   RealEstateOtherDeductions                                                                                       10-K  -457.00K USD     USD
+us-gaap   RealEstateTaxExpense                                                                                            10-K  15.25M USD       USD
+us-gaap   RepaymentsOfNotesPayable                                                                                        10-K  8.26M USD        USD
+us-gaap   RepaymentsOfSeniorDebt                                                                                          10-K  43.33M USD       USD
+us-gaap   RestrictedCashAndCashEquivalentsAtCarryingValue                                                                 10-K  34.95M USD       USD
+us-gaap   RestrictedCashAndCashEquivalentsAtCarryingValue                                                                 10-Q  34.95M USD       USD
+us-gaap   RestrictedCashAndCashEquivalentsAtCarryingValue                                                                 10-Q  34.95M USD       USD
+us-gaap   RestrictedCashAndCashEquivalentsAtCarryingValue                                                                 10-Q  34.95M USD       USD
+us-gaap   RetainedEarningsAccumulatedDeficit                                                                              10-K  1.23M USD        USD
+us-gaap   RetainedEarningsAccumulatedDeficit                                                                              10-Q  1.23M USD        USD
+us-gaap   RetainedEarningsAccumulatedDeficit                                                                              10-Q  1.23M USD        USD
+us-gaap   RetainedEarningsAccumulatedDeficit                                                                              10-Q  1.23M USD        USD
+us-gaap   RevenueFromContractWithCustomerExcludingAssessedTax                                                             10-K  155.00M USD      USD
+us-gaap   SECScheduleIIIRealEstateAccumulatedDepreciationDepreciationExpense                                              10-K  35.77M USD       USD
+us-gaap   SECScheduleIIIRealEstateInvestmentPropertyNet                                                                   10-K  687.15M USD      USD
+us-gaap   SeniorLongTermNotes                                                                                             10-K  417.26M USD      USD
+us-gaap   SeniorLongTermNotes                                                                                             10-Q  417.26M USD      USD
+us-gaap   SeniorLongTermNotes                                                                                             10-Q  417.26M USD      USD
+us-gaap   SeniorLongTermNotes                                                                                             10-Q  417.26M USD      USD
+us-gaap   ShareBasedCompensation                                                                                          10-K  1.69M USD        USD
+us-gaap   SharePrice                                                                                                      10-K  9.93 USD/shares  USD/shares
+us-gaap   StockIssuedDuringPeriodValueOther                                                                               10-K  2.32M USD        USD
+us-gaap   StockIssuedDuringPeriodValueShareBasedCompensation                                                              10-K  72.00K USD       USD
+us-gaap   StockRepurchasedDuringPeriodShares                                                                              10-K  319.58K shares   shares
+us-gaap   StockRepurchasedDuringPeriodValue                                                                               10-K  3.20M USD        USD
+us-gaap   StockholdersEquity                                                                                              10-K  12.11M USD       USD
+us-gaap   StockholdersEquity                                                                                              10-Q  12.11M USD       USD
+us-gaap   StockholdersEquity                                                                                              10-Q  12.11M USD       USD
+us-gaap   StockholdersEquity                                                                                              10-Q  12.11M USD       USD
+us-gaap   StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest                                          10-K  50.52M USD       USD
+us-gaap   StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest                                          10-Q  50.52M USD       USD
+us-gaap   StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest                                          10-Q  50.52M USD       USD
+us-gaap   StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest                                          10-Q  50.52M USD       USD
+us-gaap   WeightedAverageNumberOfDilutedSharesOutstanding                                                                 10-K  12.70M shares    shares
+us-gaap   WeightedAverageNumberOfSharesOutstandingBasic                                                                   10-K  12.70M shares    shares
+
+Total available facts on 2025-12-31: 258

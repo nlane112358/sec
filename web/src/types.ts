@@ -352,3 +352,80 @@ export interface AuditResponse {
   company: string
   raw_facts: RawFactItem[]
 }
+
+export interface QualityDiscountCandidate {
+  ticker: string
+  company: string
+  sector: string
+  peer_group: string
+  currency: string
+  quality_score: number
+  roic: number
+  has_roic: boolean
+  adj_roic: number
+  has_adj_roic: boolean
+  operating_margin: number
+  fcf_margin: number
+  share_reduction: number
+  has_share_reduction: boolean
+  price: number
+  market_cap: number
+  dcf_value: number
+  discount: number
+  upside: number
+  fcf: number
+  fcf_yield: number
+  ev_fcf: number
+  enterprise_value: number
+  net_debt: number
+  cash: number
+  debt: number
+  implied_growth: number
+  historical_growth: number
+  has_implied_growth: boolean
+  alpha_spread: number
+  qaad_score: number
+}
+
+export interface OwnerYieldCandidate {
+  rank: number
+  ticker: string
+  company: string
+  sic: string
+  sic_description: string
+  sector: string
+  currency: string
+  price: number
+  market_cap: number
+  has_market_cap: boolean
+  owner_yield: number
+  standard_owner_yield: number
+  fcf_yield: number
+  yield_spread: number
+  owner_earnings: number
+  adjusted_owner_earnings: number
+  fcf: number
+  sbc: number
+  sbc_percent_of_fcf: number
+  adjusted_roic: number
+  has_adjusted_roic: boolean
+  gaap_roic: number
+  has_gaap_roic: boolean
+  gaap_pe: number
+  has_gaap_pe: boolean
+  revenue: number
+  operating_margin: number
+  hurdle_rate: number
+  beats_hurdle: boolean
+  yield_tier: string
+  arbitrage_signal: string
+}
+
+export interface OwnerYieldResult {
+  candidates: OwnerYieldCandidate[]
+  total: number
+  hurdle_rate: number
+  median_yield: number
+  top_yield: number
+  beats_count: number
+}

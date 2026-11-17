@@ -60,7 +60,11 @@ func (s *Store) SaveFacts(ctx context.Context, ticker string, facts []FinancialF
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (cik, taxonomy, concept, unit, accession_number, period_start, period_end, form, filing_date, frame)
 DO UPDATE SET company_name = excluded.company_name, ticker = excluded.ticker,
-    label = excluded.label, value = excluded.value`)
+    label = excluded.label, value = excluded.value
+WHERE sec_facts.company_name IS NOT excluded.company_name
+   OR sec_facts.ticker IS NOT excluded.ticker
+   OR sec_facts.label IS NOT excluded.label
+   OR sec_facts.value IS NOT excluded.value`)
 	if err != nil {
 		return fmt.Errorf("prepare SEC fact insert: %w", err)
 	}
@@ -96,7 +100,12 @@ func (s *Store) SaveFilings(ctx context.Context, filings []Filing) error {
 ) VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (cik, accession_number) DO UPDATE SET
     form = excluded.form, filing_date = excluded.filing_date, report_date = excluded.report_date,
-    primary_document = excluded.primary_document, document_title = excluded.document_title`)
+    primary_document = excluded.primary_document, document_title = excluded.document_title
+WHERE sec_filings.form IS NOT excluded.form
+   OR sec_filings.filing_date IS NOT excluded.filing_date
+   OR sec_filings.report_date IS NOT excluded.report_date
+   OR sec_filings.primary_document IS NOT excluded.primary_document
+   OR sec_filings.document_title IS NOT excluded.document_title`)
 	if err != nil {
 		return fmt.Errorf("prepare filing insert: %w", err)
 	}
@@ -252,49 +261,13 @@ func (s *Store) LatestShareCount(ctx context.Context, ticker string) (float64, b
 	if err != nil {
 		return 0, false
 	}
-	var outstanding, diluted float64
-	_ = s.db.QueryRowContext(ctx, `
-		SELECT value FROM sec_facts
-		WHERE cik = ?
-		  AND concept IN (
-		      'EntityCommonStockSharesOutstanding',
-		      'CommonStockSharesOutstanding',
-		      'NumberOfSharesOutstanding'
-		  )
-		  AND unit = 'shares'
-		  AND value > 0
-		ORDER BY period_end DESC, filing_date DESC, value DESC
-		LIMIT 1`, cik).Scan(&outstanding)
-
-	_ = s.db.QueryRowContext(ctx, `
-		SELECT value FROM sec_facts
-		WHERE cik = ?
-		  AND concept IN (
-		      'WeightedAverageNumberOfDilutedSharesOutstanding',
-		      'WeightedAverageNumberOfSharesOutstandingDiluted',
-		      'DilutedWeightedAverageNumberOfOrdinarySharesOutstanding'
-		  )
-		  AND unit = 'shares'
-		  AND value > 0
-		ORDER BY period_end DESC, filing_date DESC, value DESC
-		LIMIT 1`, cik).Scan(&diluted)
-
-	hasOutstanding := finite(outstanding) && outstanding > 0
-	hasDiluted := finite(diluted) && diluted > 0
-
-	if hasOutstanding && hasDiluted {
-		if outstanding < 0.5*diluted {
-			return diluted, true
-		}
-		return outstanding, true
+	var cached float64
+	var hasCached int
+	if err := s.db.QueryRowContext(ctx, `SELECT latest_share_count, has_latest_share_count
+FROM sec_company_summaries WHERE cik = ? AND dirty = 0`, cik).Scan(&cached, &hasCached); err == nil {
+		return cached, hasCached != 0 && finite(cached) && cached > 0
 	}
-	if hasOutstanding {
-		return outstanding, true
-	}
-	if hasDiluted {
-		return diluted, true
-	}
-	return 0, false
+	return s.LatestShareCountByCIK(ctx, cik)
 }
 
 func (s *Store) HasRecentFinancialFiling(ctx context.Context, ticker string, cutoff time.Time) (bool, error) {
@@ -302,12 +275,18 @@ func (s *Store) HasRecentFinancialFiling(ctx context.Context, ticker string, cut
 	if err != nil {
 		return false, err
 	}
+	cutoffDate := cutoff.Format("2006-01-02")
+	var cachedDate string
+	if err := s.db.QueryRowContext(ctx, `SELECT latest_financial_filing_date
+FROM sec_company_summaries WHERE cik = ? AND dirty = 0`, cik).Scan(&cachedDate); err == nil {
+		return cachedDate != "" && cachedDate >= cutoffDate, nil
+	}
 	var exists int
 	err = s.db.QueryRowContext(ctx, `SELECT EXISTS(
     SELECT 1 FROM sec_filings
     WHERE cik = ? AND filing_date >= ?
       AND form IN ('10-K', '10-K/A', '10-Q', '10-Q/A', '20-F', '20-F/A', '40-F', '40-F/A', '6-K', '6-K/A')
-)`, cik, cutoff.Format("2006-01-02")).Scan(&exists)
+)`, cik, cutoffDate).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("check recent filing for %s: %w", ticker, err)
 	}

@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,14 +17,15 @@ import (
 
 func RunRank(parent context.Context, args []string, output, errorOutput io.Writer) error {
 	flags := flag.NewFlagSet("rank", flag.ContinueOnError)
-	SetFlagUsage(flags, errorOutput, "usage: sec rank [--universe FILE] [--years 5|6] [--min-revenue AMOUNT] [--currency USD|EUR|GBP] [--exclude-financials] [--data-dir DIR]")
+	SetFlagUsage(flags, errorOutput, "usage: sec rank [--universe FILE] [--top N] [--years 5|6] [--min-revenue AMOUNT] [--currency USD|EUR|GBP] [--exclude-financials] [--data-dir DIR]")
 	universeFile := flags.String("universe", "", "optional file restricting ranking to these tickers")
+	top := flags.Int("top", 0, "limit output to the top N companies by composite score (0 shows all)")
 	years := flags.Int("years", 6, "annual periods to use (6 periods provide five-year trends)")
 	minimumRevenue := flags.Float64("min-revenue", 100_000_000, "minimum latest annual revenue in USD (or --currency)")
 	currencyFlag := flags.String("currency", "USD", "currency for --min-revenue threshold (default USD)")
 	excludeFinancials := flags.Bool("exclude-financials", false, "exclude SEC financial-sector SIC codes 6000-6799")
 	dataDir := flags.String("data-dir", store.DefaultDirectory(), "directory containing the shared SQLite database")
-	if err := ParseCommandFlags(flags, args, "universe", "years", "min-revenue", "currency", "data-dir"); err != nil {
+	if err := ParseCommandFlags(flags, args, "universe", "top", "years", "min-revenue", "currency", "data-dir"); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
@@ -34,6 +36,9 @@ func RunRank(parent context.Context, args []string, output, errorOutput io.Write
 	}
 	if *years < 5 || *years > 6 {
 		return errors.New("--years must be 5 or 6 annual periods; use 6 for five-year trends")
+	}
+	if *top < 0 {
+		return errors.New("--top must be zero or a positive number")
 	}
 	var tickers []string
 	var err error
@@ -53,8 +58,24 @@ func RunRank(parent context.Context, args []string, output, errorOutput io.Write
 		if err != nil {
 			return err
 		}
+		rankedCompanies := result.Companies
+		if *top > 0 && *top < len(rankedCompanies) {
+			rankedCompanies = append([]screener.RankedCompany(nil), rankedCompanies...)
+			sort.Slice(rankedCompanies, func(i, j int) bool {
+				if rankedCompanies[i].Score != rankedCompanies[j].Score {
+					return rankedCompanies[i].Score > rankedCompanies[j].Score
+				}
+				return rankedCompanies[i].Ticker < rankedCompanies[j].Ticker
+			})
+			rankedCompanies = rankedCompanies[:*top]
+		}
 		if _, err := fmt.Fprintf(output, "Fundamental ranks: %d eligible of %d synced companies\n", len(result.Companies), result.Considered); err != nil {
 			return err
+		}
+		if *top > 0 {
+			if _, err := fmt.Fprintf(output, "Showing up to the top %d eligible companies by composite score.\n", *top); err != nil {
+				return err
+			}
 		}
 		if _, err := fmt.Fprintf(output, "Filters: latest revenue ≥ %s%.0f and positive net income in the latest three years. Nonfinancial companies also need positive latest operating cash flow; solvency is checked when cash and debt facts are present.\n", market.CurrencySymbol(*currencyFlag), *minimumRevenue); err != nil {
 			return err
@@ -75,10 +96,10 @@ func RunRank(parent context.Context, args []string, output, errorOutput io.Write
 				return err
 			}
 		}
-		nonfinancial := make([]screener.RankedCompany, 0, len(result.Companies))
-		financial := make([]screener.RankedCompany, 0, result.FinancialIncluded)
-		unclassified := make([]screener.RankedCompany, 0, result.UnclassifiedIncluded)
-		for _, company := range result.Companies {
+		nonfinancial := make([]screener.RankedCompany, 0, len(rankedCompanies))
+		financial := make([]screener.RankedCompany, 0, len(rankedCompanies))
+		unclassified := make([]screener.RankedCompany, 0, len(rankedCompanies))
+		for _, company := range rankedCompanies {
 			if company.Sector == "Financials" {
 				financial = append(financial, company)
 			} else if company.Sector == "Unclassified" {
@@ -114,7 +135,7 @@ func RunRank(parent context.Context, args []string, output, errorOutput io.Write
 		if len(result.Missing) > 0 {
 			fmt.Fprintf(errorOutput, "Not synced: %s\n", strings.Join(result.Missing, ", "))
 		}
-		if len(result.Companies) == 0 {
+		if len(rankedCompanies) == 0 {
 			fmt.Fprintln(output, "No companies passed the available-data and financial filters.")
 		}
 		if result.SBCAdjusted > 0 || result.SBCFallback > 0 {

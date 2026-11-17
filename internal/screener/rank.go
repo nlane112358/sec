@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -98,6 +97,7 @@ var financialRankFactors = []rankFactor{
 }
 
 // RankCompanies screens saved companies and calculates percentiles within SEC
+// RankCompanies screens saved companies and calculates percentiles within SEC
 // SIC major-group cohorts. years is the number of annual periods to load; six
 // periods are needed to calculate five-year trends.
 func RankCompanies(ctx context.Context, s *store.Store, years int, minimumRevenue float64, universe []string, excludeFinancials ...bool) (RankResult, error) {
@@ -108,154 +108,89 @@ func RankCompanies(ctx context.Context, s *store.Store, years int, minimumRevenu
 	if minimumRevenue < 0 || math.IsNaN(minimumRevenue) || math.IsInf(minimumRevenue, 0) {
 		return result, fmt.Errorf("minimum revenue must be a finite non-negative USD amount")
 	}
-	companies, err := s.Companies(ctx)
-	if err != nil {
-		return result, err
-	}
+
 	requested := make(map[string]struct{}, len(universe))
 	for _, ticker := range universe {
 		requested[strings.ToUpper(strings.TrimSpace(ticker))] = struct{}{}
 	}
-	found := make(map[string]struct{}, len(companies))
-	candidates := make([]rankCandidate, 0, len(companies))
+	cleanTickers := NormalizeTickers(universe)
 	excludeFin := len(excludeFinancials) > 0 && excludeFinancials[0]
 
-	type candidateResult struct {
-		candidate   rankCandidate
-		ok          bool
-		sector      string
-		excluded    bool
-		finInc      bool
-		nonFinInc   bool
-		unclass     bool
-		sicUnavail  bool
-		finExc      bool
-		sbcAdj      bool
-		sbcFall     bool
-		missingSolv bool
+	if len(universe) > 0 && len(cleanTickers) == 0 {
+		for ticker := range requested {
+			result.Missing = append(result.Missing, ticker)
+		}
+		sort.Strings(result.Missing)
+		return result, nil
 	}
 
-	numWorkers := 8
-	jobs := make(chan store.LocalCompany, len(companies))
-	results := make(chan candidateResult, len(companies))
-
-	var wg sync.WaitGroup
-	for w := 0; w < numWorkers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for company := range jobs {
-				if ctx.Err() != nil {
-					return
-				}
-				var cr candidateResult
-				sector := sectorFromSIC(company.SIC)
-				if sector == "Unclassified" {
-					cr.sicUnavail = true
-				}
-				if sector == "Financials" && excludeFin {
-					cr.excluded = true
-					cr.finExc = true
-					results <- cr
-					continue
-				}
-				recent, err := s.HasRecentFinancialFiling(ctx, company.Ticker, time.Now().AddDate(0, -15, 0))
-				if err != nil || !recent {
-					cr.excluded = true
-					results <- cr
-					continue
-				}
-				summary, err := fundamentals.LoadFinancialSummary(ctx, s, years, company.Ticker)
-				if err != nil {
-					cr.excluded = true
-					results <- cr
-					continue
-				}
-				financial := sector == "Financials"
-				candidate, ok := makeRankCandidate(summary, minimumRevenue, financial)
-				if !ok {
-					cr.excluded = true
-					results <- cr
-					continue
-				}
-				candidate.company.Sector = sector
-				candidate.company.PeerGroup = peerGroupFromSIC(company.SIC)
-				cr.sector = sector
-				cr.candidate = candidate
-				cr.ok = true
-				if sector == "Financials" {
-					cr.finInc = true
-				} else if sector == "Nonfinancial" {
-					cr.nonFinInc = true
-				} else {
-					cr.unclass = true
-				}
-				if candidate.company.HasSBCAdjustment {
-					cr.sbcAdj = true
-				} else if candidate.company.HasOwnerEarnings {
-					cr.sbcFall = true
-				}
-				if !financial && !candidate.company.HasBalanceSheet {
-					cr.missingSolv = true
-				}
-				results <- cr
-			}
-		}()
+	if _, err := PrecomputeMissingOrDirty(ctx, s, PrecomputeOptions{
+		Tickers:           cleanTickers,
+		RankYears:         []int{years},
+		RefreshRankScores: len(cleanTickers) == 0,
+	}); err != nil {
+		return result, err
 	}
 
-	for _, company := range companies {
-		if err := ctx.Err(); err != nil {
-			close(jobs)
-			wg.Wait()
-			close(results)
-			return result, err
+	rows, err := s.LoadRankVariables(ctx, years, RankSchemaVersion, cleanTickers)
+	if err != nil {
+		return result, err
+	}
+
+	cutoffDate := time.Now().AddDate(0, -15, 0).Format("2006-01-02")
+	found := make(map[string]struct{}, len(rows))
+	candidates := make([]rankCandidate, 0, len(rows))
+
+	for _, row := range rows {
+		if ctx.Err() != nil {
+			return result, ctx.Err()
 		}
 		if len(requested) > 0 {
-			if _, ok := requested[strings.ToUpper(company.Ticker)]; !ok {
+			if _, ok := requested[strings.ToUpper(row.Ticker)]; !ok {
 				continue
 			}
 		}
-		found[strings.ToUpper(company.Ticker)] = struct{}{}
+		found[strings.ToUpper(row.Ticker)] = struct{}{}
 		result.Considered++
-		jobs <- company
-	}
-	close(jobs)
-	wg.Wait()
-	close(results)
 
-	for cr := range results {
-		if cr.sicUnavail {
+		sector := sectorFromSIC(row.SIC)
+		if sector == "Unclassified" {
 			result.SICUnavailable++
 		}
-		if cr.finExc {
+		if sector == "Financials" && excludeFin {
 			result.FinancialExcluded++
-		}
-		if cr.excluded {
 			result.Excluded++
 			continue
 		}
-		if cr.finInc {
+		if row.LatestFinancialFilingDate == "" || row.LatestFinancialFilingDate < cutoffDate {
+			result.Excluded++
+			continue
+		}
+		if !row.Eligible || market.ToUSD(row.Revenue, row.Currency) < minimumRevenue {
+			result.Excluded++
+			continue
+		}
+
+		candidate := candidateFromRankRecord(row)
+		candidates = append(candidates, candidate)
+		switch sector {
+		case "Financials":
 			result.FinancialIncluded++
-		}
-		if cr.nonFinInc {
+		case "Nonfinancial":
 			result.NonfinancialIncluded++
-		}
-		if cr.unclass {
+		default:
 			result.UnclassifiedIncluded++
 		}
-		if cr.sbcAdj {
+		if candidate.company.HasSBCAdjustment {
 			result.SBCAdjusted++
-		}
-		if cr.sbcFall {
+		} else if candidate.company.HasOwnerEarnings {
 			result.SBCFallback++
 		}
-		if cr.missingSolv {
+		if sector != "Financials" && !candidate.company.HasBalanceSheet {
 			result.MissingSolvencyData++
 		}
-		if cr.ok {
-			candidates = append(candidates, cr.candidate)
-		}
 	}
+
 	for ticker := range requested {
 		if _, ok := found[ticker]; !ok {
 			result.Missing = append(result.Missing, ticker)

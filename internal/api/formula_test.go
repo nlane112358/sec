@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"sec/internal/fundamentals"
+	"sec/internal/screener"
 )
 
 func TestFormulaEndpoints(t *testing.T) {
@@ -291,5 +292,67 @@ func TestFormulaEndpoints(t *testing.T) {
 			t.Fatalf("expected HTML to contain sec-provenance-highlight CSS/JS")
 		}
 		t.Logf("AAPL filing HTML served: length=%d bytes, contains highlight script", len(body))
+	})
+
+	// 12. Test /api/companies (includes all listed companies)
+	t.Run("All companies listings endpoint", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/companies", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var companies []CompanyItem
+		if err := json.Unmarshal(rec.Body.Bytes(), &companies); err != nil {
+			t.Fatalf("unmarshal companies: %v", err)
+		}
+
+		if len(companies) < 10000 {
+			t.Fatalf("expected over 10,000 listed companies, got %d", len(companies))
+		}
+		t.Logf("Total listed companies returned: %d", len(companies))
+	})
+
+	// 13. Test /api/stats (reports full coverage)
+	t.Run("Stats endpoint reports total listed companies", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/stats", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var stats StatsResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &stats); err != nil {
+			t.Fatalf("unmarshal stats: %v", err)
+		}
+
+		if stats.TotalCompanies < 10000 {
+			t.Fatalf("expected over 10,000 total companies in stats, got %d", stats.TotalCompanies)
+		}
+		t.Logf("Stats reported total companies: %d, facts: %d", stats.TotalCompanies, stats.TotalFacts)
+	})
+
+	// 14. Test /api/screener/discount (Quality-at-a-Discount endpoint)
+	t.Run("Quality at a discount screener endpoint", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/screener/discount?universe=top10_defense_space&min_score=50&min_roic=5&min_discount=0", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var resp struct {
+			Candidates []screener.QualityDiscountCandidate `json:"candidates"`
+			Total      int                                 `json:"total"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("unmarshal discount screener: %v", err)
+		}
+		t.Logf("Quality-at-a-Discount candidates returned: %d", resp.Total)
 	})
 }

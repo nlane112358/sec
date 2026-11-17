@@ -32,6 +32,7 @@ Access the frontend at `http://localhost:8080`.
 - **Interactive Forward & Reverse DCF**: Dynamic sliders for Growth, WACC/Discount, and Terminal Growth with real-time per-share intrinsic valuation, EV-to-equity bridge, 3x3 sensitivity matrix, shareable model URLs, and a **Reverse DCF (Expectations Arbitrage)** solver finding market-implied growth and alpha spread.
 - **Intangible Capitalization & Waterfall**: Modern GAAP arbitrage breakdown (5-year linear R&D amortization, 30% SG&A brand capital over 3 years) with visual step-by-step Capitalization Waterfall bridge.
 - **Buffett Compounder Screener**: Multi-factor institutional ranking across 528 companies with 0–100 quality scores, Intangible-adjusted ROIC, FCF conversion, 5Y revenue CAGR, and share cannibalism/buyback filters.
+- **Owner Earnings Yield Ranking**: Dedicated institutional screener ranking companies by intangible-adjusted owner earnings yield (`(FCF - SBC + Net Intangibles) / Market Cap`) against the 10-year Treasury hurdle (6.84%), exposing headline FCF yield vs SBC dilution drag, market caps, and franchise compounder tiers with CSV export.
 - **Side-by-Side Peer Benchmarking**: Direct competitor matrix comparing ROIC, margins, growth, and quality scores with 1-click navigation.
 - **Watchlists & Recents**: Quick star watchlists and recent history tray in navigation for rapid switching.
 - **True "Click-to-Verify" SEC Filing Traceability**: Clicking any cell across Annual, Quarterly, or TTM Financial Statements opens a split-screen drawer displaying the exact XBRL concept provenance (`us-gaap:ResearchAndDevelopmentExpense`), SEC Form 10-K filing date, accession number, 1-click `=SEC("AAPL", "Revenue", 2025)` copy button, and the live official SEC filing HTML anchored and highlighted directly at the table line item.
@@ -260,6 +261,32 @@ Screen for companies that look unprofitable or "expensive" on standard GAAP metr
   - `--max-gaap-roic PCT`: Cap standard GAAP ROIC to isolate firms where GAAP expensing creates the widest distortion.
   - `--sort yield|roic|spread|score`: Sort table by Owner Yield, Adjusted ROIC, ROIC Delta spread, or composite arbitrage score.
   - `--prices FILE` / `--fetch-prices`: Supply valuation file or pull live market prices from Yahoo Finance / Stooq.
+
+### Quality-at-a-Discount (QaaD) Screener (`discount`)
+
+Automates the classic Warren Buffett & Charlie Munger investment mandate: *"It's far better to buy a wonderful company at a fair price than a fair company at a wonderful price."*
+
+The screener filters for high-moat compounders (5Y multi-year ROIC ≥ 12%, composite Quality Score ≥ 70, positive operating cash flow, operating consistency ≥ 75%) that simultaneously trade at a substantial margin of safety to DCF intrinsic value:
+
+```sh
+# Run QaaD screener across small-caps or broad market
+./sec discount --prices data/prices.csv --universe russell2000.txt --min-score 70 --min-discount 15
+./sec discount --fetch-prices --universe sp500.txt --min-score 75 --min-discount 20
+./sec discount --prices data/prices.csv --sort discount --top 10
+./sec discount --prices data/prices.csv --min-fcf-yield 6.0 --require-buybacks
+```
+
+- **Composite QAAD Score (0–100)**:
+  - **50% Quality Component**: SEC multi-factor percentile score incorporating 5Y ROIC, owner earnings margin, revenue CAGR, operating consistency, net debt/cash solvency, and share reduction.
+  - **50% Discount Component**: Evaluates DCF Margin of Safety ($\frac{\text{DCF Value} - \text{Price}}{\text{DCF Value}}$), Free Cash Flow Yield ($\frac{\text{FCF}}{\text{Market Cap}}$), and Expectations Arbitrage Alpha Spread ($\text{Historical Growth} - \text{Market-Implied Growth}$).
+- **Options**:
+  - `--min-score SCORE`: Minimum composite quality score (0–100, default `70`).
+  - `--min-roic PCT`: Minimum 5Y average ROIC in percent (default `12%`).
+  - `--min-discount PCT`: Minimum DCF Margin of Safety in percent (default `15%`).
+  - `--min-fcf-yield PCT`: Minimum Free Cash Flow Yield in percent (default `0%`).
+  - `--require-buybacks`: Require shrinking or non-dilutive share count.
+  - `--sort qaad|discount|quality|yield|upside`: Primary ranking criterion (default `qaad`).
+  - `--top N`: Limit output to the top N qualifying candidates.
 
 ### Rank Companies
 

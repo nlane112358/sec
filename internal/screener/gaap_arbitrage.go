@@ -7,10 +7,10 @@ import (
 	"math"
 	"sort"
 	"strings"
-	"sync"
 	"text/tabwriter"
 
 	"sec/internal/fundamentals"
+	"sec/internal/market"
 	"sec/internal/store"
 )
 
@@ -67,76 +67,38 @@ func ScreenModernGAAPArbitrage(ctx context.Context, s *store.Store, tickers []st
 	if filter.Years < 1 {
 		filter.Years = 5
 	}
+	if filter.Years > 10 {
+		filter.Years = 10
+	}
 	if filter.MinRevenue <= 0 {
 		filter.MinRevenue = 100_000_000
 	}
 
-	var companies []store.LocalCompany
-	if len(tickers) > 0 {
-		tickerSet := make(map[string]bool)
-		for _, t := range tickers {
-			tickerSet[strings.ToUpper(strings.TrimSpace(t))] = true
-		}
-		all, err := s.Companies(ctx)
-		if err != nil {
-			return nil, err
-		}
-		for _, c := range all {
-			if tickerSet[strings.ToUpper(c.Ticker)] {
-				companies = append(companies, c)
-			}
-		}
-	} else {
-		all, err := s.Companies(ctx)
-		if err != nil {
-			return nil, err
-		}
-		companies = all
+	cleanTickers := NormalizeTickers(tickers)
+	if len(tickers) > 0 && len(cleanTickers) == 0 {
+		return nil, nil
 	}
 
-	type resultItem struct {
-		cand ModernGAAPCandidate
-		ok   bool
+	if _, err := PrecomputeMissingOrDirty(ctx, s, PrecomputeOptions{
+		Tickers:   cleanTickers,
+		RankYears: nil,
+		ArbYears:  []int{filter.Years},
+	}); err != nil {
+		return nil, err
 	}
 
-	numWorkers := 8
-	jobs := make(chan store.LocalCompany, len(companies))
-	results := make(chan resultItem, len(companies))
-
-	var wg sync.WaitGroup
-	for w := 0; w < numWorkers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for comp := range jobs {
-				if ctx.Err() != nil {
-					return
-				}
-				cand, ok := evaluateModernGAAPCompany(ctx, s, comp, filter, marketCaps, prices)
-				if ok {
-					results <- resultItem{cand: cand, ok: true}
-				}
-			}
-		}()
+	rows, err := s.LoadGAAPArbitrageVariables(ctx, filter.Years, GAAPArbitrageSchemaVersion, cleanTickers)
+	if err != nil {
+		return nil, err
 	}
 
-	for _, company := range companies {
+	candidates := make([]ModernGAAPCandidate, 0, len(rows))
+	for _, row := range rows {
 		if ctx.Err() != nil {
-			close(jobs)
-			wg.Wait()
-			close(results)
 			return nil, ctx.Err()
 		}
-		jobs <- company
-	}
-	close(jobs)
-	wg.Wait()
-	close(results)
-
-	candidates := make([]ModernGAAPCandidate, 0)
-	for r := range results {
-		if r.ok {
-			candidates = append(candidates, r.cand)
+		if cand, ok := evaluateModernGAAPFromRecord(row, filter, marketCaps, prices); ok {
+			candidates = append(candidates, cand)
 		}
 	}
 
@@ -175,6 +137,111 @@ func ScreenModernGAAPArbitrage(ctx context.Context, s *store.Store, tickers []st
 	}
 
 	return candidates, nil
+}
+
+func evaluateModernGAAPFromRecord(row store.GAAPArbitrageVariableRecord, filter ModernGAAPFilter, marketCaps, prices map[string]float64) (ModernGAAPCandidate, bool) {
+	var zero ModernGAAPCandidate
+	if !row.Eligible {
+		return zero, false
+	}
+	if !filter.IncludeFinancials && row.Sector == "Financials" {
+		return zero, false
+	}
+	if row.GAAPRevenue < filter.MinRevenue {
+		return zero, false
+	}
+
+	marketCap := resolveMarketCapFromRecord(row, marketCaps, prices)
+	hasMarketCap := marketCap > 0
+	gaapPE := 0.0
+	hasGAAP_PE := false
+	if hasMarketCap && row.GAAPNetIncome > 0 {
+		gaapPE = marketCap / row.GAAPNetIncome
+		hasGAAP_PE = true
+	}
+
+	ownerEarningsYield := 0.0
+	hasYield := false
+	if hasMarketCap && row.HasOwnerEarnings {
+		ownerEarningsYield = row.AdjustedOwnerEarnings / marketCap
+		hasYield = true
+	}
+
+	if filter.MinAdjustedROIC > 0 && (!row.HasAdjustedROIC || row.AdjustedROIC < filter.MinAdjustedROIC) {
+		return zero, false
+	}
+	if filter.MinOwnerYield > 0 && (!hasYield || ownerEarningsYield < filter.MinOwnerYield) {
+		return zero, false
+	}
+	if filter.RequireSurging && !row.SurgingROIC {
+		return zero, false
+	}
+	if filter.MaxGAAPROIC > 0 && row.HasGAAPROIC && row.GAAPROIC > filter.MaxGAAPROIC {
+		return zero, false
+	}
+	if filter.RequireGAAPExpensive {
+		isExpensive := row.GAAPUnprofitable || (hasGAAP_PE && gaapPE >= 25.0) || (row.HasGAAPROIC && row.GAAPROIC < 0.15) || (row.ROICDelta >= 0.05)
+		if !isExpensive {
+			return zero, false
+		}
+	}
+
+	signal, score := computeArbitrageSignalAndScore(
+		row.GAAPNetIncome, row.AdjustedEBIT, row.AdjustedROIC, row.HasAdjustedROIC,
+		row.HasGAAPROIC, row.ROICDelta, row.SurgingROIC,
+		gaapPE, hasGAAP_PE, ownerEarningsYield, hasYield,
+	)
+
+	return ModernGAAPCandidate{
+		Ticker:                row.Ticker,
+		Company:               row.CompanyName,
+		SIC:                   row.SIC,
+		SICDescription:        row.SICDescription,
+		Currency:              row.Currency,
+		MarketCap:             marketCap,
+		HasMarketCap:          hasMarketCap,
+		GAAPRevenue:           row.GAAPRevenue,
+		GAAPNetIncome:         row.GAAPNetIncome,
+		GAAPOperatingIncome:   row.GAAPOperatingIncome,
+		GAAPOperatingMargin:   row.GAAPOperatingMargin,
+		GAAPROIC:              row.GAAPROIC,
+		HasGAAPROIC:           row.HasGAAPROIC,
+		GAAP_PE:               gaapPE,
+		HasGAAP_PE:            hasGAAP_PE,
+		GAAPUnprofitable:      row.GAAPUnprofitable,
+		IntangibleCapital:     row.IntangibleCapital,
+		AdjustedEBIT:          row.AdjustedEBIT,
+		AdjustedEBITMargin:    row.AdjustedEBITMargin,
+		AdjustedInvestedCap:   row.AdjustedInvestedCap,
+		AdjustedROIC:          row.AdjustedROIC,
+		HasAdjustedROIC:       row.HasAdjustedROIC,
+		AvgAdjustedROIC:       row.AvgAdjustedROIC,
+		ROICDelta:             row.ROICDelta,
+		SurgingROIC:           row.SurgingROIC,
+		OwnerEarnings:         row.OwnerEarnings,
+		AdjustedOwnerEarnings: row.AdjustedOwnerEarnings,
+		OwnerEarningsYield:    ownerEarningsYield,
+		HasOwnerEarningsYield: hasYield,
+		ArbitrageScore:        score,
+		ArbitrageSignal:       signal,
+	}, true
+}
+
+func resolveMarketCapFromRecord(row store.GAAPArbitrageVariableRecord, marketCaps, prices map[string]float64) float64 {
+	marketCap := valuationForTicker(marketCaps, row.Ticker)
+	if !finite(marketCap) || marketCap <= 0 {
+		price := valuationForTicker(prices, row.Ticker)
+		if finite(price) && price > 0 && row.SharesOutstanding > 0 {
+			adrShares := market.OrdinaryToADRShares(row.Ticker, row.SharesOutstanding)
+			marketCapUSD := price * adrShares
+			if row.Currency != "" && !strings.EqualFold(row.Currency, "USD") {
+				marketCap = market.FromUSD(marketCapUSD, row.Currency)
+			} else {
+				marketCap = marketCapUSD
+			}
+		}
+	}
+	return marketCap
 }
 
 func evaluateModernGAAPCompany(ctx context.Context, s *store.Store, company store.LocalCompany, filter ModernGAAPFilter, marketCaps, prices map[string]float64) (ModernGAAPCandidate, bool) {

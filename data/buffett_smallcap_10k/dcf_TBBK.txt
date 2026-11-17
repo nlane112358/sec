@@ -1,0 +1,46 @@
+Bancorp, Inc. (TBBK) — Discounted Cash Flow Valuation
+
+Assumptions:
+  Model mode:	fcf
+  CapEx mode:	raw with terminal wedge fade
+  Base FCF (FY 2025):	$257.92M
+  Forecast growth:	  25.00% (three-year historical FCF CAGR (capped at 25.0% for forward baseline))
+  Historical 3Y FCF CAGR:	  31.09%
+  Discount rate:	   9.61% (calculated WACC)
+  Terminal growth:	   2.50%
+  Forecast period:	5 years
+  Tax rate:	  25.11% (historical effective tax rate)
+  WACC estimate:	   9.61%
+  Risk-free / beta / ERP:	4.84% / 1.00 / 5.50%
+  Cost of equity:	  10.34%
+  Cost of debt:	   5.00% (baseline cost-of-debt assumption)
+  Capital weights (equity / net debt):	88.9% / 11.1%
+  Equity basis:	reported book equity proxy
+  Debt basis:	SEC-reported debt
+  Debt / cash used for weights:	$199.00M / $112.65M
+
+Cash Flow Forecast:
+  Year 1 :	$323.02M	(growth CapEx wedge remaining: $2.49M; PV: $294.71M)
+  Year 2 :	$404.55M	(growth CapEx wedge remaining: $2.33M; PV: $336.75M)
+  Year 3 :	$506.67M	(growth CapEx wedge remaining: $1.95M; PV: $384.78M)
+  Year 4 :	$634.55M	(growth CapEx wedge remaining: $1.22M; PV: $439.67M)
+  Year 5 :	$794.71M	(PV: $502.38M)
+  PV of explicit cash flows:	$1.96B
+  Terminal value:	$11.46B
+  PV of terminal value:	$7.25B
+
+Valuation Bridge:
+  Enterprise value:	$9.20B
+  + Cash & equivalents:	$112.65M
+  - Total debt (SEC-reported debt):	$199.00M
+  Equity value:	$9.12B
+  Shares outstanding:	42.19M shares
+
+Intrinsic Value / Share:	$216.10
+
+Sensitivity Matrix (value per share):
+Discount \ Terminal  2.00%    2.50%    3.00%
+8.61%                $238.23  $255.01  $274.79
+9.61%                $204.03  $216.10  $230.00
+10.61%               $177.86  $186.88  $197.09
+FCF mode starts with operating cash flow minus CapEx; review it before treating the result as unlevered FCFF.

@@ -36,6 +36,7 @@ type quoteEntry struct {
 type cachedSummary struct {
 	response SummaryResponse
 	asOf     time.Time
+	epoch    int64
 }
 
 type cachedFilings struct {
@@ -59,6 +60,7 @@ type Server struct {
 	rankMu         sync.RWMutex
 	cachedRank     *screener.RankResult
 	rankTime       time.Time
+	rankEpoch      int64
 	statsMu        sync.RWMutex
 	cachedStats    *StatsResponse
 	statsTime      time.Time
@@ -67,6 +69,15 @@ type Server struct {
 	gaapArbMu      sync.RWMutex
 	cachedArb      []screener.ModernGAAPCandidate
 	arbTime        time.Time
+	arbEpoch       int64
+	ownerYieldMu   sync.RWMutex
+	cachedYield    *screener.OwnerYieldResult
+	yieldTime      time.Time
+	yieldEpoch     int64
+	qaadMu         sync.RWMutex
+	cachedQAAD     []screener.QualityDiscountCandidate
+	qaadTime       time.Time
+	qaadEpoch      int64
 	summaryMu      sync.RWMutex
 	summaryCache   map[string]cachedSummary
 	filingsMu      sync.RWMutex
@@ -104,7 +115,7 @@ func NewServer(storePath string, staticDir string, staticFS fs.FS) (*Server, err
 
 	// Initialize stats quickly using max(rowid) instead of full table scans
 	var totalCompanies, totalFilings, totalFacts int
-	_ = s.DB().QueryRow("SELECT count(*) FROM sec_companies").Scan(&totalCompanies)
+	_ = s.DB().QueryRow("SELECT count(*) FROM sec_tickers").Scan(&totalCompanies)
 	_ = s.DB().QueryRow("SELECT max(rowid) FROM sec_filings").Scan(&totalFilings)
 	_ = s.DB().QueryRow("SELECT max(rowid) FROM sec_facts").Scan(&totalFacts)
 	srv.cachedStats = &StatsResponse{
@@ -116,14 +127,23 @@ func NewServer(storePath string, staticDir string, staticFS fs.FS) (*Server, err
 
 	// Warm screener ranking & GAAP arbitrage cache in background
 	go func() {
-		bgCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
+		epochBefore, _ := s.CacheEpoch(bgCtx)
 		if res, err := screener.RankCompanies(bgCtx, s, 5, 0, nil, false); err == nil {
+			epochNow, _ := s.CacheEpoch(bgCtx)
+			if epochNow < epochBefore {
+				epochNow = epochBefore
+			}
 			srv.rankMu.Lock()
 			srv.cachedRank = &res
 			srv.rankTime = time.Now()
+			srv.rankEpoch = epochNow
 			srv.rankMu.Unlock()
 		}
+
+		pricesPath := filepath.Join(filepath.Dir(storePath), "prices.csv")
+		marketCaps, prices, _ := market.LoadValuationInputs(pricesPath)
 
 		filter := screener.ModernGAAPFilter{
 			MinAdjustedROIC:      0.10,
@@ -133,11 +153,25 @@ func NewServer(storePath string, staticDir string, staticFS fs.FS) (*Server, err
 			RequireGAAPExpensive: false,
 			SortBy:               "spread",
 		}
-		if arbRes, err := screener.ScreenModernGAAPArbitrage(bgCtx, s, nil, nil, nil, filter); err == nil {
+		if arbRes, err := screener.ScreenModernGAAPArbitrage(bgCtx, s, nil, marketCaps, prices, filter); err == nil {
+			epochNow, _ := s.CacheEpoch(bgCtx)
 			srv.gaapArbMu.Lock()
 			srv.cachedArb = arbRes
 			srv.arbTime = time.Now()
+			srv.arbEpoch = epochNow
 			srv.gaapArbMu.Unlock()
+		}
+
+		if yieldRes, err := screener.ScreenOwnerYield(bgCtx, s, nil, marketCaps, prices, screener.OwnerYieldFilter{
+			Years:      5,
+			MinRevenue: 50_000_000,
+		}); err == nil {
+			epochNow, _ := s.CacheEpoch(bgCtx)
+			srv.ownerYieldMu.Lock()
+			srv.cachedYield = &yieldRes
+			srv.yieldTime = time.Now()
+			srv.yieldEpoch = epochNow
+			srv.ownerYieldMu.Unlock()
 		}
 	}()
 
@@ -166,7 +200,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/company/{ticker}/quote", s.handleCompanyQuote)
 	mux.HandleFunc("GET /api/company/{ticker}/audit", s.handleCompanyAudit)
 	mux.HandleFunc("GET /api/screener/rank", s.handleScreenerRank)
+	mux.HandleFunc("GET /api/screener/owner-yield", s.handleScreenerOwnerYield)
 	mux.HandleFunc("GET /api/screener/gaap-arbitrage", s.handleScreenerGAAPArbitrage)
+	mux.HandleFunc("GET /api/screener/discount", s.handleScreenerQualityDiscount)
+	mux.HandleFunc("GET /api/screener/quality-discount", s.handleScreenerQualityDiscount)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("GET /api/universes", s.handleUniverses)
 
@@ -297,11 +334,12 @@ func (s *Server) handleCompanySummary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	dbEpoch, _ := s.store.CacheEpoch(r.Context())
 	cacheKey := fmt.Sprintf("%s:%s:%d:%d", ticker, view, years, quarters)
 	s.summaryMu.RLock()
 	cached, found := s.summaryCache[cacheKey]
 	s.summaryMu.RUnlock()
-	if found && time.Since(cached.asOf) < 10*time.Minute {
+	if found && time.Since(cached.asOf) < 10*time.Minute && cached.epoch == dbEpoch {
 		writeJSON(w, http.StatusOK, cached.response)
 		return
 	}
@@ -339,6 +377,53 @@ func (s *Server) handleCompanySummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(summary.Periods) == 0 && s.edgarClient != nil {
+		syncCtx, syncCancel := context.WithTimeout(r.Context(), 15*time.Second)
+		factsData, errFacts := s.edgarClient.Facts(syncCtx, cik)
+		syncCancel()
+		if errFacts == nil && factsData != nil {
+			facts := edgar.ExtractFacts(factsData, cik)
+			if len(facts) > 0 {
+				_ = s.store.SaveFacts(r.Context(), ticker, facts)
+				subCtx, subCancel := context.WithTimeout(r.Context(), 10*time.Second)
+				if sub, errSub := s.edgarClient.Submissions(subCtx, cik); errSub == nil {
+					filings := sub.AllFilings(cik)
+					_ = s.store.SaveFilings(r.Context(), filings)
+					compName := sub.Name
+					if strings.TrimSpace(compName) == "" {
+						compName = factsData.Entity
+					}
+					_ = s.store.SaveCompany(r.Context(), cik, compName, ticker, string(sub.SIC), sub.SICDescription)
+					_ = s.store.DB().QueryRowContext(r.Context(), "SELECT sic, sic_description FROM sec_companies WHERE cik = ?", cik).Scan(&sic, &sicDesc)
+					name = compName
+				}
+				subCancel()
+
+				_ = screener.PrecomputeCompany(r.Context(), s.store, store.LocalCompany{
+					CIK:            cik,
+					Name:           name,
+					Ticker:         ticker,
+					SIC:            sic,
+					SICDescription: sicDesc,
+				})
+				dbEpoch, _ = s.store.CacheEpoch(r.Context())
+				s.invalidateScreenerCaches()
+
+				switch view {
+				case "quarterly", "q":
+					summary, _ = fundamentals.LoadQuarterlySummary(r.Context(), s.store, quarters, ticker)
+				case "ttm":
+					summary, _ = fundamentals.LoadTTMFinancialSummary(r.Context(), s.store, ticker)
+					if ttmDetails, errTTM := fundamentals.LoadTTMSummary(r.Context(), s.store, ticker); errTTM == nil {
+						inflections = ttmDetails.Inflections
+					}
+				default:
+					summary, _ = fundamentals.LoadFinancialSummary(r.Context(), s.store, years, ticker)
+				}
+			}
+		}
+	}
+
 	intangibles := fundamentals.CalculateIntangibles(summary)
 
 	res := SummaryResponse{
@@ -358,6 +443,7 @@ func (s *Server) handleCompanySummary(w http.ResponseWriter, r *http.Request) {
 	s.summaryCache[cacheKey] = cachedSummary{
 		response: res,
 		asOf:     time.Now(),
+		epoch:    dbEpoch,
 	}
 	s.summaryMu.Unlock()
 
@@ -1054,9 +1140,27 @@ func templateEscape(s string) string {
 	return s
 }
 
+func (s *Server) invalidateScreenerCaches() {
+	s.rankMu.Lock()
+	s.cachedRank = nil
+	s.rankTime = time.Time{}
+	s.rankMu.Unlock()
+
+	s.gaapArbMu.Lock()
+	s.cachedArb = nil
+	s.arbTime = time.Time{}
+	s.gaapArbMu.Unlock()
+
+	s.qaadMu.Lock()
+	s.cachedQAAD = nil
+	s.qaadTime = time.Time{}
+	s.qaadMu.Unlock()
+}
+
 func (s *Server) handleScreenerRank(w http.ResponseWriter, r *http.Request) {
+	dbEpoch, _ := s.store.CacheEpoch(r.Context())
 	s.rankMu.RLock()
-	if s.cachedRank != nil && time.Since(s.rankTime) < 15*time.Minute {
+	if s.cachedRank != nil && time.Since(s.rankTime) < 15*time.Minute && s.rankEpoch == dbEpoch {
 		cached := s.cachedRank
 		s.rankMu.RUnlock()
 		writeJSON(w, http.StatusOK, cached)
@@ -1066,8 +1170,9 @@ func (s *Server) handleScreenerRank(w http.ResponseWriter, r *http.Request) {
 
 	s.rankMu.Lock()
 	defer s.rankMu.Unlock()
+	dbEpoch, _ = s.store.CacheEpoch(r.Context())
 	// Double check
-	if s.cachedRank != nil && time.Since(s.rankTime) < 15*time.Minute {
+	if s.cachedRank != nil && time.Since(s.rankTime) < 15*time.Minute && s.rankEpoch == dbEpoch {
 		writeJSON(w, http.StatusOK, s.cachedRank)
 		return
 	}
@@ -1078,28 +1183,182 @@ func (s *Server) handleScreenerRank(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("screener rank error: %v", err))
 		return
 	}
+	epochAfter, _ := s.store.CacheEpoch(r.Context())
+	if epochAfter > dbEpoch {
+		dbEpoch = epochAfter
+	}
 
 	s.cachedRank = &result
 	s.rankTime = time.Now()
+	s.rankEpoch = dbEpoch
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleScreenerOwnerYield(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	uVal := q.Get("universe")
+	sortVal := q.Get("sort")
+	sortDir := q.Get("sort_dir")
+	minYieldVal := q.Get("min_yield")
+	minROICVal := q.Get("min_roic")
+	minRevVal := q.Get("min_revenue")
+	hurdleVal := q.Get("hurdle")
+	finVal := q.Get("include_financials")
+
+	var universeTickers []string
+	if uVal != "" {
+		if strings.Contains(uVal, ",") {
+			for _, part := range strings.Split(uVal, ",") {
+				if t := strings.TrimSpace(part); t != "" {
+					universeTickers = append(universeTickers, strings.ToUpper(t))
+				}
+			}
+		} else {
+			uDir := findUniversesDir()
+			path := filepath.Join(uDir, uVal)
+			if !strings.HasSuffix(path, ".txt") && !strings.Contains(uVal, ".") {
+				path += ".txt"
+			}
+			if data, err := os.ReadFile(path); err == nil {
+				for _, line := range strings.Split(string(data), "\n") {
+					line = strings.TrimSpace(line)
+					if line != "" && !strings.HasPrefix(line, "#") {
+						universeTickers = append(universeTickers, strings.ToUpper(line))
+					}
+				}
+			} else {
+				universeTickers = append(universeTickers, strings.ToUpper(uVal))
+			}
+		}
+	}
+
+	isDefaultQuery := len(universeTickers) == 0 &&
+		minYieldVal == "" &&
+		minROICVal == "" &&
+		minRevVal == "" &&
+		hurdleVal == "" &&
+		finVal == "" &&
+		(sortVal == "" || sortVal == "yield") &&
+		(sortDir == "" || sortDir == "desc")
+
+	dbEpoch, _ := s.store.CacheEpoch(r.Context())
+	if isDefaultQuery {
+		s.ownerYieldMu.RLock()
+		if s.cachedYield != nil && time.Since(s.yieldTime) < 15*time.Minute && s.yieldEpoch == dbEpoch {
+			cached := s.cachedYield
+			s.ownerYieldMu.RUnlock()
+			writeJSON(w, http.StatusOK, cached)
+			return
+		}
+		s.ownerYieldMu.RUnlock()
+	}
+
+	minYield := 0.0
+	if minYieldVal != "" {
+		if v, err := strconv.ParseFloat(minYieldVal, 64); err == nil && v >= 0 {
+			minYield = v / 100.0
+		}
+	}
+	minROIC := 0.0
+	if minROICVal != "" {
+		if v, err := strconv.ParseFloat(minROICVal, 64); err == nil {
+			minROIC = v / 100.0
+		}
+	}
+	minRev := 50_000_000.0
+	if minRevVal != "" {
+		if v, err := strconv.ParseFloat(minRevVal, 64); err == nil && v >= 0 {
+			minRev = v
+		}
+	}
+	requireHurdle := strings.EqualFold(hurdleVal, "true") || hurdleVal == "1"
+	includeFin := strings.EqualFold(finVal, "true") || finVal == "1"
+
+	pricesPath := filepath.Join(filepath.Dir(s.storePath), "prices.csv")
+	marketCaps, prices, _ := market.LoadValuationInputs(pricesPath)
+	if prices == nil {
+		prices = make(map[string]float64)
+	}
+	if marketCaps == nil {
+		marketCaps = make(map[string]float64)
+	}
+
+	s.quoteMu.RLock()
+	for t, qEntry := range s.quoteCache {
+		if qEntry.price > 0 {
+			prices[t] = qEntry.price
+		}
+	}
+	s.quoteMu.RUnlock()
+
+	filter := screener.OwnerYieldFilter{
+		MinYield:          minYield,
+		MinAdjustedROIC:   minROIC,
+		MinRevenue:        minRev,
+		Years:             5,
+		RequireHurdleBeat: requireHurdle,
+		IncludeFinancials: includeFin,
+		SortBy:            sortVal,
+		SortAsc:           strings.EqualFold(sortDir, "asc"),
+	}
+
+	result, err := screener.ScreenOwnerYield(r.Context(), s.store, universeTickers, marketCaps, prices, filter)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("owner yield screen: %v", err))
+		return
+	}
+
+	if isDefaultQuery {
+		epochAfter, _ := s.store.CacheEpoch(r.Context())
+		if epochAfter > dbEpoch {
+			dbEpoch = epochAfter
+		}
+		s.ownerYieldMu.Lock()
+		s.cachedYield = &result
+		s.yieldTime = time.Now()
+		s.yieldEpoch = dbEpoch
+		s.ownerYieldMu.Unlock()
+	}
+
 	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleScreenerGAAPArbitrage(w http.ResponseWriter, r *http.Request) {
-	s.gaapArbMu.RLock()
-	if s.cachedArb != nil && time.Since(s.arbTime) < 15*time.Minute {
-		cached := s.cachedArb
-		s.gaapArbMu.RUnlock()
-		writeJSON(w, http.StatusOK, map[string]any{"candidates": cached, "total": len(cached)})
-		return
+	q := r.URL.Query()
+	sortBy := "spread"
+	if sVal := q.Get("sort"); sVal != "" {
+		sortBy = sVal
 	}
-	s.gaapArbMu.RUnlock()
 
-	s.gaapArbMu.Lock()
-	defer s.gaapArbMu.Unlock()
-	if s.cachedArb != nil && time.Since(s.arbTime) < 15*time.Minute {
-		writeJSON(w, http.StatusOK, map[string]any{"candidates": s.cachedArb, "total": len(s.cachedArb)})
-		return
+	isDefaultQuery := sortBy == "spread"
+	dbEpoch, _ := s.store.CacheEpoch(r.Context())
+	if isDefaultQuery {
+		s.gaapArbMu.RLock()
+		if s.cachedArb != nil && time.Since(s.arbTime) < 15*time.Minute && s.arbEpoch == dbEpoch {
+			cached := s.cachedArb
+			s.gaapArbMu.RUnlock()
+			writeJSON(w, http.StatusOK, map[string]any{"candidates": cached, "total": len(cached)})
+			return
+		}
+		s.gaapArbMu.RUnlock()
 	}
+
+	pricesPath := filepath.Join(filepath.Dir(s.storePath), "prices.csv")
+	marketCaps, prices, _ := market.LoadValuationInputs(pricesPath)
+	if prices == nil {
+		prices = make(map[string]float64)
+	}
+	if marketCaps == nil {
+		marketCaps = make(map[string]float64)
+	}
+
+	s.quoteMu.RLock()
+	for t, qEntry := range s.quoteCache {
+		if qEntry.price > 0 {
+			prices[t] = qEntry.price
+		}
+	}
+	s.quoteMu.RUnlock()
 
 	filter := screener.ModernGAAPFilter{
 		MinAdjustedROIC:      0.10,
@@ -1107,17 +1366,196 @@ func (s *Server) handleScreenerGAAPArbitrage(w http.ResponseWriter, r *http.Requ
 		Years:                5,
 		RequireSurging:       false,
 		RequireGAAPExpensive: false,
-		SortBy:               "spread",
+		SortBy:               sortBy,
 	}
 
-	candidates, err := screener.ScreenModernGAAPArbitrage(r.Context(), s.store, nil, nil, nil, filter)
+	candidates, err := screener.ScreenModernGAAPArbitrage(r.Context(), s.store, nil, marketCaps, prices, filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("gaap arbitrage screen: %v", err))
 		return
 	}
 
-	s.cachedArb = candidates
-	s.arbTime = time.Now()
+	if isDefaultQuery {
+		epochAfter, _ := s.store.CacheEpoch(r.Context())
+		if epochAfter > dbEpoch {
+			dbEpoch = epochAfter
+		}
+		s.gaapArbMu.Lock()
+		s.cachedArb = candidates
+		s.arbTime = time.Now()
+		s.arbEpoch = dbEpoch
+		s.gaapArbMu.Unlock()
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"candidates": candidates, "total": len(candidates)})
+}
+
+func (s *Server) handleScreenerQualityDiscount(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	uVal := q.Get("universe")
+
+	var universeTickers []string
+	if uVal != "" {
+		if strings.Contains(uVal, ",") {
+			for _, part := range strings.Split(uVal, ",") {
+				if t := strings.TrimSpace(part); t != "" {
+					universeTickers = append(universeTickers, strings.ToUpper(t))
+				}
+			}
+		} else {
+			uDir := findUniversesDir()
+			path := filepath.Join(uDir, uVal)
+			if !strings.HasSuffix(path, ".txt") && !strings.Contains(uVal, ".") {
+				path += ".txt"
+			}
+			if data, err := os.ReadFile(path); err == nil {
+				for _, line := range strings.Split(string(data), "\n") {
+					line = strings.TrimSpace(line)
+					if line != "" && !strings.HasPrefix(line, "#") {
+						universeTickers = append(universeTickers, strings.ToUpper(line))
+					}
+				}
+			} else {
+				universeTickers = append(universeTickers, strings.ToUpper(uVal))
+			}
+		}
+	}
+
+	// For global screening (no universe filter), return cached QAAD if fresh
+	dbEpoch, _ := s.store.CacheEpoch(r.Context())
+	if len(universeTickers) == 0 {
+		s.qaadMu.RLock()
+		if s.cachedQAAD != nil && time.Since(s.qaadTime) < 15*time.Minute && s.qaadEpoch == dbEpoch {
+			cached := s.cachedQAAD
+			s.qaadMu.RUnlock()
+			writeJSON(w, http.StatusOK, map[string]any{"candidates": cached, "total": len(cached)})
+			return
+		}
+		s.qaadMu.RUnlock()
+	}
+
+	var companiesToScreen []screener.RankedCompany
+	if len(universeTickers) > 0 {
+		s.rankMu.RLock()
+		cached := s.cachedRank
+		rankEpoch := s.rankEpoch
+		s.rankMu.RUnlock()
+		if cached != nil && rankEpoch == dbEpoch {
+			tickerMap := make(map[string]bool, len(universeTickers))
+			for _, t := range universeTickers {
+				tickerMap[t] = true
+			}
+			for _, c := range cached.Companies {
+				if tickerMap[c.Ticker] {
+					companiesToScreen = append(companiesToScreen, c)
+				}
+			}
+		} else {
+			ranked, err := screener.RankCompanies(r.Context(), s.store, 5, 0, universeTickers, false)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, fmt.Sprintf("screener rank error: %v", err))
+				return
+			}
+			companiesToScreen = ranked.Companies
+		}
+	} else {
+		s.qaadMu.Lock()
+		defer s.qaadMu.Unlock()
+		dbEpoch, _ = s.store.CacheEpoch(r.Context())
+		if s.cachedQAAD != nil && time.Since(s.qaadTime) < 15*time.Minute && s.qaadEpoch == dbEpoch {
+			writeJSON(w, http.StatusOK, map[string]any{"candidates": s.cachedQAAD, "total": len(s.cachedQAAD)})
+			return
+		}
+
+		s.rankMu.RLock()
+		rankResult := s.cachedRank
+		rankEpoch := s.rankEpoch
+		s.rankMu.RUnlock()
+		if rankResult == nil || rankEpoch != dbEpoch {
+			ranked, err := screener.RankCompanies(r.Context(), s.store, 5, 0, nil, false)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, fmt.Sprintf("screener rank error: %v", err))
+				return
+			}
+			epochAfter, _ := s.store.CacheEpoch(r.Context())
+			if epochAfter > dbEpoch {
+				dbEpoch = epochAfter
+			}
+			s.rankMu.Lock()
+			s.cachedRank = &ranked
+			s.rankTime = time.Now()
+			s.rankEpoch = dbEpoch
+			s.rankMu.Unlock()
+			rankResult = &ranked
+		}
+		companiesToScreen = rankResult.Companies
+	}
+
+	pricesPath := filepath.Join(filepath.Dir(s.storePath), "prices.csv")
+	marketCaps, prices, _ := market.LoadValuationInputs(pricesPath)
+	if prices == nil {
+		prices = make(map[string]float64)
+	}
+	if marketCaps == nil {
+		marketCaps = make(map[string]float64)
+	}
+
+	s.quoteMu.RLock()
+	for t, q := range s.quoteCache {
+		if q.price > 0 {
+			prices[t] = q.price
+		}
+	}
+	s.quoteMu.RUnlock()
+
+	minScore := 65.0
+	if sVal := q.Get("min_score"); sVal != "" {
+		if v, err := strconv.ParseFloat(sVal, 64); err == nil && v >= 0 {
+			minScore = v
+		}
+	}
+	minROIC := 0.10
+	if rVal := q.Get("min_roic"); rVal != "" {
+		if v, err := strconv.ParseFloat(rVal, 64); err == nil {
+			minROIC = v / 100.0
+		}
+	}
+	minDiscount := 0.05
+	if dVal := q.Get("min_discount"); dVal != "" {
+		if v, err := strconv.ParseFloat(dVal, 64); err == nil {
+			minDiscount = v / 100.0
+		}
+	}
+	sortBy := "qaad"
+	if sVal := q.Get("sort"); sVal != "" {
+		sortBy = sVal
+	}
+
+	filter := screener.QualityDiscountFilter{
+		MinScore:          minScore,
+		MinROIC:           minROIC,
+		MinDiscount:       minDiscount,
+		SortBy:            sortBy,
+		IncludeFinancials: false,
+		DCFConfig: valuation.DCFConfig{
+			Mode:         valuation.DCFModeFCF,
+			TerminalRate: 0.025,
+			Years:        5,
+		},
+	}
+
+	candidates, err := screener.ScreenQualityDiscount(r.Context(), s.store, companiesToScreen, marketCaps, prices, filter)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("quality discount screen error: %v", err))
+		return
+	}
+
+	if len(universeTickers) == 0 {
+		epochAfter, _ := s.store.CacheEpoch(r.Context())
+		s.cachedQAAD = candidates
+		s.qaadTime = time.Now()
+		s.qaadEpoch = epochAfter
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"candidates": candidates, "total": len(candidates)})
 }
 
@@ -1272,7 +1710,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var totalCompanies, totalFilings, totalFacts int
-	_ = s.store.DB().QueryRowContext(r.Context(), "SELECT count(*) FROM sec_companies").Scan(&totalCompanies)
+	_ = s.store.DB().QueryRowContext(r.Context(), "SELECT count(*) FROM sec_tickers").Scan(&totalCompanies)
 	_ = s.store.DB().QueryRowContext(r.Context(), "SELECT coalesce(max(rowid), 0) FROM sec_filings").Scan(&totalFilings)
 	_ = s.store.DB().QueryRowContext(r.Context(), "SELECT coalesce(max(rowid), 0) FROM sec_facts").Scan(&totalFacts)
 

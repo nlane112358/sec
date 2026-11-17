@@ -1,0 +1,45 @@
+Strawberry Fields REIT, Inc. (STRW) — Discounted Cash Flow Valuation
+
+Assumptions:
+  Model mode:	fcf
+  CapEx mode:	raw with terminal wedge fade
+  Base FCF (FY 2025):	$90.04M
+  Forecast growth:	  20.92% (three-year historical FCF CAGR)
+  Discount rate:	   4.92% (calculated WACC)
+  Terminal growth:	   2.50%
+  Forecast period:	5 years
+  Tax rate:	  21.00% (baseline tax assumption)
+  WACC estimate:	   4.92%
+  Risk-free / beta / ERP:	4.84% / 1.00 / 5.50%
+  Cost of equity:	  10.34%
+  Cost of debt:	   6.11% (historical interest/finance costs / average borrowings)
+  Capital weights (equity / net debt):	1.6% / 98.4%
+  Equity basis:	reported book equity proxy
+  Debt basis:	SEC-reported debt
+  Debt / cash used for weights:	$794.65M / $31.81M
+
+Cash Flow Forecast:
+  Year 1 :	$108.87M	(PV: $103.77M)
+  Year 2 :	$131.65M	(PV: $119.60M)
+  Year 3 :	$159.19M	(PV: $137.84M)
+  Year 4 :	$192.48M	(PV: $158.86M)
+  Year 5 :	$232.75M	(PV: $183.09M)
+  PV of explicit cash flows:	$703.16M
+  Terminal value:	$9.87B
+  PV of terminal value:	$7.77B
+
+Valuation Bridge:
+  Enterprise value:	$8.47B
+  + Cash & equivalents:	$31.81M
+  - Total debt (SEC-reported debt):	$794.65M
+  Equity value:	$7.71B
+  Shares outstanding:	13.38M shares
+
+Intrinsic Value / Share:	$576.03
+
+Sensitivity Matrix (value per share):
+Discount \ Terminal  2.00%    2.50%     3.00%
+3.92%                $761.32  $1036.09  $1610.65
+4.92%                $474.17  $576.03   $731.05
+5.92%                $333.85  $385.50   $454.87
+FCF mode starts with operating cash flow minus CapEx; review it before treating the result as unlevered FCFF.

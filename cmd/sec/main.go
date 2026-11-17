@@ -16,6 +16,7 @@ const usage = `usage: sec <command> [arguments] [options]
 Commands:
   sync TICKER...              Download or refresh facts and filings
   sync --universe FILE        Sync newline-separated tickers from a file
+  precompute [TICKER...]      Precompute and cache rank & GAAP arbitrage variables
   summary TICKER [--years N]  Show annual financial metrics (3-5 years)
   dcf TICKER [options]        Estimate intrinsic value from SEC facts
   arbitrage [options]         Rank quality compounders against implied growth
@@ -27,6 +28,7 @@ Commands:
   universe [list]             List available universes and sync coverage
   export TICKER --format FMT  Export saved facts as csv or json
   rank [--universe FILE]      Screen and rank the saved universe
+  discount [options]          Screen quality compounders trading at a discount (DCF margin of safety)
   serve [--port PORT]         Start web server and interactive frontend
 
 Options:
@@ -61,6 +63,8 @@ func run(parent context.Context, args []string, output, errorOutput io.Writer) e
 	switch command {
 	case "sync":
 		return commands.RunSync(parent, args, output, errorOutput)
+	case "precompute":
+		return commands.RunPrecompute(parent, args, output, errorOutput)
 	case "summary":
 		return commands.RunSummary(parent, args, output, errorOutput)
 	case "dcf":
@@ -77,6 +81,8 @@ func run(parent context.Context, args []string, output, errorOutput io.Writer) e
 		return commands.RunRank(parent, args, output, errorOutput)
 	case "arbitrage":
 		return commands.RunArbitrage(parent, args, output, errorOutput)
+	case "discount", "quality-discount", "qaad", "qarp":
+		return commands.RunQualityDiscount(parent, args, output, errorOutput)
 	case "gaap-arbitrage", "modern-value", "modern", "intangible":
 		return commands.RunModernGAAPArbitrage(parent, args, output, errorOutput)
 	case "audit":

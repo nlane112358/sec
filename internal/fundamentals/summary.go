@@ -2,6 +2,7 @@ package fundamentals
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -13,6 +14,8 @@ import (
 
 	"sec/internal/store"
 )
+
+const SummarySchemaVersion = 1
 
 type summaryFact struct {
 	taxonomy  string
@@ -336,17 +339,154 @@ func LoadFinancialSummary(ctx context.Context, s *store.Store, yearCount int, ti
 		yearCount = 10
 	}
 	var summary FinancialSummary
-	var cik string
+	var cik, companyName, savedTicker string
 	var err error
 	if len(ticker) > 0 && strings.TrimSpace(ticker[0]) != "" {
-		cik, summary.Company, summary.Ticker, err = s.CompanyForTicker(ctx, ticker[0])
+		cik, companyName, savedTicker, err = s.CompanyForTicker(ctx, ticker[0])
 	} else {
 		err = s.DB().QueryRowContext(ctx, `SELECT c.cik, c.company_name, t.ticker
 FROM sec_tickers t JOIN sec_companies c ON c.cik = t.cik
-ORDER BY t.ticker LIMIT 1`).Scan(&cik, &summary.Company, &summary.Ticker)
+ORDER BY t.ticker LIMIT 1`).Scan(&cik, &companyName, &savedTicker)
 	}
 	if err != nil {
 		return summary, fmt.Errorf("load company for summary: %w", err)
+	}
+
+	if rec, ok, cacheErr := s.LoadCompanySummaryCache(ctx, cik, SummarySchemaVersion); cacheErr == nil && ok {
+		if jsonErr := json.Unmarshal([]byte(rec.SummaryJSON), &summary); jsonErr == nil {
+			return SliceSummary(summary, yearCount, savedTicker), nil
+		}
+	}
+
+	rec, fullSummary, err := BuildCompanySummaryRecord(ctx, s, cik, companyName, savedTicker, "")
+	if err != nil {
+		return summary, err
+	}
+	_ = s.SaveCompanySummaryCache(ctx, rec)
+	return SliceSummary(fullSummary, yearCount, savedTicker), nil
+}
+
+// BuildCompanySummaryRecord computes the 10-year FinancialSummary for a CIK,
+// gathers its filing & share metadata, and serializes a store.CompanySummaryRecord.
+func BuildCompanySummaryRecord(ctx context.Context, s *store.Store, cik, companyName, ticker, sic string) (store.CompanySummaryRecord, FinancialSummary, error) {
+	var rec store.CompanySummaryRecord
+	if sic == "" {
+		_ = s.DB().QueryRowContext(ctx, `SELECT COALESCE(sic, ''), CASE WHEN company_name <> '' THEN company_name ELSE ? END FROM sec_companies WHERE cik = ?`, companyName, cik).Scan(&sic, &companyName)
+	}
+	fullSummary, err := computeFinancialSummary(ctx, s, cik, companyName, ticker, 10)
+	if err != nil {
+		return rec, fullSummary, err
+	}
+	sanitizeSummaryFloats(&fullSummary)
+	payload, err := json.Marshal(fullSummary)
+	if err != nil {
+		return rec, fullSummary, fmt.Errorf("marshal summary for %s: %w", cik, err)
+	}
+
+	latestFilingDate, latestAccession, latestFinancialFilingDate, filingsCount, err := s.FilingMetadataByCIK(ctx, cik)
+	if err != nil {
+		return rec, fullSummary, err
+	}
+	latestShareCount, hasLatestShares := s.LatestShareCountByCIK(ctx, cik)
+
+	currency := summaryCurrency(fullSummary)
+	if currency == "" {
+		currency = "USD"
+	}
+	latestPeriodEnd := ""
+	if len(fullSummary.Periods) > 0 {
+		latestPeriodEnd = fullSummary.Periods[0].End
+	}
+
+	rec = store.CompanySummaryRecord{
+		CIK:                       cik,
+		Ticker:                    fullSummary.Ticker,
+		CompanyName:               fullSummary.Company,
+		SIC:                       sic,
+		Currency:                  currency,
+		LatestPeriodEnd:           latestPeriodEnd,
+		PeriodsCount:              len(fullSummary.Periods),
+		LatestFilingDate:          latestFilingDate,
+		LatestAccession:           latestAccession,
+		LatestFinancialFilingDate: latestFinancialFilingDate,
+		FilingsCount:              filingsCount,
+		LatestShareCount:          latestShareCount,
+		HasLatestShareCount:       hasLatestShares,
+		SummaryJSON:               string(payload),
+		SchemaVersion:             SummarySchemaVersion,
+	}
+	return rec, fullSummary, nil
+}
+
+// SliceSummary returns a view of a cached 10-year FinancialSummary truncated to
+// yearCount periods and rewritten to targetTicker (including Excel formulas) when provided.
+func SliceSummary(summary FinancialSummary, yearCount int, targetTicker string) FinancialSummary {
+	if yearCount < 1 {
+		yearCount = 5
+	}
+	if yearCount > 10 {
+		yearCount = 10
+	}
+	out := FinancialSummary{
+		Company: summary.Company,
+		Ticker:  summary.Ticker,
+	}
+	if targetTicker != "" {
+		out.Ticker = targetTicker
+	}
+	limit := len(summary.Periods)
+	if limit > yearCount {
+		limit = yearCount
+	}
+	out.Periods = make([]SummaryPeriod, limit)
+	copy(out.Periods, summary.Periods[:limit])
+
+	tickerForFormula := out.Ticker
+	rewriteTicker := tickerForFormula != "" && summary.Ticker != "" && !strings.EqualFold(tickerForFormula, summary.Ticker)
+
+	out.Metrics = make([]SummaryMetric, len(summary.Metrics))
+	for mIdx, m := range summary.Metrics {
+		valLen := len(m.Values)
+		if valLen > limit {
+			valLen = limit
+		}
+		vals := make([]SummaryValue, valLen)
+		copy(vals, m.Values[:valLen])
+		if rewriteTicker {
+			for pIdx := range vals {
+				if vals[pIdx].Present && vals[pIdx].Formula != "" && pIdx < len(out.Periods) {
+					yearStr := out.Periods[pIdx].Year
+					if yearStr == "" {
+						yearStr = out.Periods[pIdx].End
+					}
+					vals[pIdx].Formula = fmt.Sprintf("=SEC(\"%s\", \"%s\", %s)", tickerForFormula, m.Name, yearStr)
+				}
+			}
+		}
+		out.Metrics[mIdx] = SummaryMetric{
+			Name:   m.Name,
+			Values: vals,
+		}
+	}
+	return out
+}
+
+func sanitizeSummaryFloats(summary *FinancialSummary) {
+	for mIdx := range summary.Metrics {
+		for pIdx := range summary.Metrics[mIdx].Values {
+			v := &summary.Metrics[mIdx].Values[pIdx]
+			if !finite(v.Value) {
+				v.Value = 0
+				v.Present = false
+			}
+		}
+	}
+}
+
+func computeFinancialSummary(ctx context.Context, s *store.Store, cik, companyName, savedTicker string, yearCount int) (FinancialSummary, error) {
+	summary := FinancialSummary{
+		Company: companyName,
+		Ticker:  savedTicker,
 	}
 
 	rows, err := s.DB().QueryContext(ctx, `SELECT taxonomy, concept, unit, value,

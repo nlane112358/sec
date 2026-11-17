@@ -47,6 +47,12 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("initialise company database schema: %w", err)
 	}
+	for _, triggerSQL := range precomputeTriggers {
+		if _, err := db.ExecContext(ctx, triggerSQL); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("initialise company database trigger: %w", err)
+		}
+	}
 	return &Store{db: db}, nil
 }
 

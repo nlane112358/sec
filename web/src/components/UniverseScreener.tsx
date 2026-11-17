@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react'
+import React, { useState, useMemo, useEffect, useRef } from 'react'
 import {
   Search,
   ArrowRight,
@@ -15,8 +15,19 @@ import {
   Sparkles,
   Copy,
   Check,
+  TrendingUp,
+  Award,
 } from 'lucide-react'
-import { Company, RankedCompany, RankResult, ModernGAAPCandidate, UniverseItem } from '../types'
+import {
+  Company,
+  RankedCompany,
+  RankResult,
+  ModernGAAPCandidate,
+  UniverseItem,
+  QualityDiscountCandidate,
+  OwnerYieldCandidate,
+  OwnerYieldResult,
+} from '../types'
 import { formatPercent, formatCurrency } from '../lib/format'
 import { prefetchOnHover, prefetchSummary } from '../lib/cache'
 
@@ -36,12 +47,60 @@ type SortField =
 
 type FilterPreset = 'all' | 'quality' | 'roic' | 'cannibals' | 'fcf'
 
+export type ScreenerViewMode =
+  | 'ranked'
+  | 'owner-yield'
+  | 'scatter'
+  | 'quality-discount'
+  | 'gaap-arbitrage'
+  | 'directory'
+  | 'universes'
+
 export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
   companies,
   currentTicker,
   onSelectTicker,
 }) => {
-  const [viewMode, setViewMode] = useState<'ranked' | 'scatter' | 'gaap-arbitrage' | 'directory' | 'universes'>('ranked')
+  const [viewMode, setViewMode] = useState<ScreenerViewMode>(() => {
+    if (typeof window !== 'undefined') {
+      const hash = window.location.hash
+      if (hash.includes('mode=owner-yield')) return 'owner-yield'
+      if (hash.includes('mode=gaap-arbitrage')) return 'gaap-arbitrage'
+      if (hash.includes('mode=quality-discount')) return 'quality-discount'
+      if (hash.includes('mode=scatter')) return 'scatter'
+      if (hash.includes('mode=directory')) return 'directory'
+      if (hash.includes('mode=universes')) return 'universes'
+    }
+    return 'ranked'
+  })
+
+  // Owner Yield State
+  const [ownerYieldData, setOwnerYieldData] = useState<OwnerYieldResult | null>(null)
+  const [loadingOwnerYield, setLoadingOwnerYield] = useState<boolean>(false)
+  const [ownerYieldError, setOwnerYieldError] = useState<string | null>(null)
+  const [ownerYieldSortField, setOwnerYieldSortField] = useState<keyof OwnerYieldCandidate>('owner_yield')
+  const [ownerYieldSortAsc, setOwnerYieldSortAsc] = useState<boolean>(false)
+  const [ownerYieldPreset, setOwnerYieldPreset] = useState<'all' | 'hurdle' | 'franchise' | 'low-sbc' | 'high-roic'>('all')
+  const [minOwnerYield, setMinOwnerYield] = useState<number>(0)
+  const [minOwnerAdjROIC, setMinOwnerAdjROIC] = useState<number>(-5)
+  const [maxSBCPct, setMaxSBCPct] = useState<number>(100)
+  const [showOwnerYieldFilters, setShowOwnerYieldFilters] = useState<boolean>(false)
+  const fetchedOwnerYieldRef = useRef<boolean>(false)
+
+  useEffect(() => {
+    const handleHash = () => {
+      const hash = window.location.hash
+      if (hash.includes('mode=owner-yield')) setViewMode('owner-yield')
+      else if (hash.includes('mode=gaap-arbitrage')) setViewMode('gaap-arbitrage')
+      else if (hash.includes('mode=quality-discount')) setViewMode('quality-discount')
+      else if (hash.includes('mode=scatter')) setViewMode('scatter')
+      else if (hash.includes('mode=directory')) setViewMode('directory')
+      else if (hash.includes('mode=universes')) setViewMode('universes')
+    }
+    window.addEventListener('hashchange', handleHash)
+    return () => window.removeEventListener('hashchange', handleHash)
+  }, [])
+
   const [rankedData, setRankedData] = useState<RankResult | null>(null)
   const [loadingRank, setLoadingRank] = useState<boolean>(false)
   const [rankError, setRankError] = useState<string | null>(null)
@@ -51,6 +110,15 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
   const [universes, setUniverses] = useState<UniverseItem[]>([])
   const [loadingUniverses, setLoadingUniverses] = useState<boolean>(false)
   const [copiedSyncCmd, setCopiedSyncCmd] = useState<string | null>(null)
+  const fetchedUniversesRef = useRef<boolean>(false)
+
+  // Quality at a Discount State
+  const [discountCandidates, setDiscountCandidates] = useState<QualityDiscountCandidate[]>([])
+  const [loadingDiscount, setLoadingDiscount] = useState<boolean>(false)
+  const [discountError, setDiscountError] = useState<string | null>(null)
+  const [discountSortField, setDiscountSortField] = useState<keyof QualityDiscountCandidate>('qaad_score')
+  const [discountSortAsc, setDiscountSortAsc] = useState<boolean>(false)
+  const fetchedDiscountRef = useRef<boolean>(false)
 
   // Modern GAAP Arbitrage State
   const [gaapCandidates, setGaapCandidates] = useState<ModernGAAPCandidate[]>([])
@@ -58,12 +126,18 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
   const [gaapError, setGaapError] = useState<string | null>(null)
   const [gaapSortField, setGaapSortField] = useState<keyof ModernGAAPCandidate>('roic_delta')
   const [gaapSortAsc, setGaapSortAsc] = useState<boolean>(false)
+  const fetchedGAAPRef = useRef<boolean>(false)
 
   const [search, setSearch] = useState('')
   const [selectedSector, setSelectedSector] = useState<string>('ALL')
   const [preset, setPreset] = useState<FilterPreset>('all')
   const [sortField, setSortField] = useState<SortField>('score')
   const [sortAsc, setSortAsc] = useState<boolean>(false)
+  const [directoryLimit, setDirectoryLimit] = useState<number>(100)
+
+  useEffect(() => {
+    setDirectoryLimit(100)
+  }, [search, selectedSector])
 
   // Quantitative Range Sliders
   const [minScore, setMinScore] = useState<number>(0)
@@ -137,52 +211,125 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
     }
   }, [])
 
+  // Fetch Owner Yield ranking data
+  useEffect(() => {
+    if (viewMode === 'owner-yield' && !fetchedOwnerYieldRef.current) {
+      let ignore = false
+      setLoadingOwnerYield(true)
+      setOwnerYieldError(null)
+      fetch('/api/screener/owner-yield')
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP error ${res.status}`)
+          return res.json()
+        })
+        .then((data: OwnerYieldResult) => {
+          if (!ignore) {
+            fetchedOwnerYieldRef.current = true
+            setOwnerYieldData(data)
+            setLoadingOwnerYield(false)
+          }
+        })
+        .catch((err) => {
+          if (!ignore) {
+            setOwnerYieldError(err.message || 'Failed to load Owner Yield ranking')
+            setLoadingOwnerYield(false)
+          }
+        })
+      return () => {
+        ignore = true
+      }
+    }
+  }, [viewMode])
+
   // Fetch GAAP Arbitrage data
   useEffect(() => {
-    if (viewMode === 'gaap-arbitrage' && gaapCandidates.length === 0 && !loadingGAAP) {
+    if (viewMode === 'gaap-arbitrage' && !fetchedGAAPRef.current) {
       let ignore = false
       setLoadingGAAP(true)
+      setGaapError(null)
       fetch('/api/screener/gaap-arbitrage')
         .then((res) => {
           if (!res.ok) throw new Error(`HTTP error ${res.status}`)
           return res.json()
         })
         .then((data: { candidates: ModernGAAPCandidate[] }) => {
-          if (!ignore && data?.candidates) {
-            setGaapCandidates(data.candidates)
+          if (!ignore) {
+            fetchedGAAPRef.current = true
+            if (data?.candidates) {
+              setGaapCandidates(data.candidates)
+            }
+            setLoadingGAAP(false)
           }
         })
         .catch((err) => {
-          if (!ignore) setGaapError(err.message || 'Failed to load GAAP Arbitrage screener')
-        })
-        .finally(() => {
-          if (!ignore) setLoadingGAAP(false)
+          if (!ignore) {
+            setGaapError(err.message || 'Failed to load GAAP Arbitrage screener')
+            setLoadingGAAP(false)
+          }
         })
       return () => {
         ignore = true
       }
     }
-  }, [viewMode, gaapCandidates.length, loadingGAAP])
+  }, [viewMode])
+
+  // Fetch Quality-at-a-Discount data
+  useEffect(() => {
+    if (viewMode === 'quality-discount' && !fetchedDiscountRef.current) {
+      let ignore = false
+      setLoadingDiscount(true)
+      setDiscountError(null)
+      fetch('/api/screener/discount')
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP error ${res.status}`)
+          return res.json()
+        })
+        .then((data: { candidates: QualityDiscountCandidate[] }) => {
+          if (!ignore) {
+            fetchedDiscountRef.current = true
+            if (data?.candidates) {
+              setDiscountCandidates(data.candidates)
+            }
+            setLoadingDiscount(false)
+          }
+        })
+        .catch((err) => {
+          if (!ignore) {
+            setDiscountError(err.message || 'Failed to load Quality-at-a-Discount screener')
+            setLoadingDiscount(false)
+          }
+        })
+      return () => {
+        ignore = true
+      }
+    }
+  }, [viewMode])
 
   // Fetch Universes data
   useEffect(() => {
-    if (viewMode === 'universes' && universes.length === 0 && !loadingUniverses) {
+    if (viewMode === 'universes' && !fetchedUniversesRef.current) {
       let ignore = false
       setLoadingUniverses(true)
       fetch('/api/universes')
-        .then((res) => (res.ok ? res.json() : []))
-        .then((data: UniverseItem[]) => {
-          if (!ignore) setUniverses(data)
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP error ${res.status}`)
+          return res.json()
         })
-        .catch(() => {})
-        .finally(() => {
+        .then((data: UniverseItem[]) => {
+          if (!ignore) {
+            fetchedUniversesRef.current = true
+            setUniverses(data)
+            setLoadingUniverses(false)
+          }
+        })
+        .catch(() => {
           if (!ignore) setLoadingUniverses(false)
         })
       return () => {
         ignore = true
       }
     }
-  }, [viewMode, universes.length, loadingUniverses])
+  }, [viewMode])
 
   // Sectors list
   const sectorOptions = useMemo(() => {
@@ -193,6 +340,16 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
     })
     return Array.from(set).sort()
   }, [rankedData])
+
+  // Owner Yield Sectors list
+  const ownerYieldSectorOptions = useMemo(() => {
+    if (!ownerYieldData) return []
+    const set = new Set<string>()
+    ownerYieldData.candidates.forEach((c) => {
+      if (c.sector) set.add(c.sector)
+    })
+    return Array.from(set).sort()
+  }, [ownerYieldData])
 
   // SIC list for directory
   const sicOptions = useMemo(() => {
@@ -280,9 +437,9 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
     return list
   }, [rankedData, selectedSector, preset, search, sortField, sortAsc, minScore, minROIC, minRevCAGR])
 
-  // Directory filter
+  // Directory filter with relevance scoring
   const filteredDirectory = useMemo(() => {
-    return companies.filter((c) => {
+    const list = companies.filter((c) => {
       if (selectedSector !== 'ALL' && c.sic !== selectedSector) {
         return false
       }
@@ -296,6 +453,29 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
         )
       }
       return true
+    })
+
+    if (!search.trim()) {
+      return list
+    }
+
+    const q = search.trim().toLowerCase()
+    return list.slice().sort((a, b) => {
+      const aTick = a.ticker.toLowerCase()
+      const bTick = b.ticker.toLowerCase()
+      const aExact = aTick === q ? 1 : 0
+      const bExact = bTick === q ? 1 : 0
+      if (aExact !== bExact) return bExact - aExact
+
+      const aStart = aTick.startsWith(q) ? 1 : 0
+      const bStart = bTick.startsWith(q) ? 1 : 0
+      if (aStart !== bStart) return bStart - aStart
+
+      const aNameStart = a.name.toLowerCase().startsWith(q) ? 1 : 0
+      const bNameStart = b.name.toLowerCase().startsWith(q) ? 1 : 0
+      if (aNameStart !== bNameStart) return bNameStart - aNameStart
+
+      return aTick.localeCompare(bTick)
     })
   }, [companies, search, selectedSector])
 
@@ -314,6 +494,45 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
     if (score >= 70)
       return 'border border-neutral-400 dark:border-neutral-600 text-neutral-800 dark:text-neutral-200'
     return 'border border-neutral-200 dark:border-neutral-800 text-neutral-500'
+  }
+
+  // Filter & Sort Quality at a Discount Candidates
+  const filteredDiscount = useMemo(() => {
+    let list = discountCandidates.filter((c) => {
+      if (selectedSector !== 'ALL' && c.sector !== selectedSector) {
+        return false
+      }
+      if (search.trim()) {
+        const q = search.toLowerCase()
+        return (
+          c.ticker.toLowerCase().includes(q) ||
+          c.company.toLowerCase().includes(q) ||
+          c.sector.toLowerCase().includes(q) ||
+          c.peer_group.toLowerCase().includes(q)
+        )
+      }
+      return true
+    })
+
+    list.sort((a, b) => {
+      let va = (a as any)[discountSortField] ?? 0
+      let vb = (b as any)[discountSortField] ?? 0
+      if (typeof va === 'string') {
+        return discountSortAsc ? va.localeCompare(vb) : vb.localeCompare(va)
+      }
+      return discountSortAsc ? va - vb : vb - va
+    })
+
+    return list
+  }, [discountCandidates, search, selectedSector, discountSortField, discountSortAsc])
+
+  const handleDiscountSort = (field: keyof QualityDiscountCandidate) => {
+    if (discountSortField === field) {
+      setDiscountSortAsc(!discountSortAsc)
+    } else {
+      setDiscountSortField(field)
+      setDiscountSortAsc(false)
+    }
   }
 
   // Filter & Sort Modern GAAP Arbitrage Candidates
@@ -352,6 +571,131 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
     }
   }
 
+  // Filter & Sort Owner Yield Candidates
+  const filteredOwnerYield = useMemo(() => {
+    if (!ownerYieldData) return []
+    let list = ownerYieldData.candidates.filter((c) => {
+      if (selectedSector !== 'ALL' && c.sector !== selectedSector) {
+        return false
+      }
+      if (ownerYieldPreset === 'hurdle' && !c.beats_hurdle) return false
+      if (ownerYieldPreset === 'franchise' && c.owner_yield < 0.08) return false
+      if (ownerYieldPreset === 'low-sbc' && c.sbc_percent_of_fcf > 15) return false
+      if (ownerYieldPreset === 'high-roic' && (!c.has_adjusted_roic || c.adjusted_roic < 0.15)) return false
+
+      if (search.trim()) {
+        const q = search.toLowerCase()
+        return (
+          c.ticker.toLowerCase().includes(q) ||
+          c.company.toLowerCase().includes(q) ||
+          c.sector.toLowerCase().includes(q) ||
+          c.sic_description.toLowerCase().includes(q)
+        )
+      }
+      return true
+    })
+
+    if (minOwnerYield > 0) {
+      list = list.filter((c) => c.owner_yield * 100 >= minOwnerYield)
+    }
+    if (minOwnerAdjROIC > -5) {
+      list = list.filter((c) => c.has_adjusted_roic && c.adjusted_roic * 100 >= minOwnerAdjROIC)
+    }
+    if (maxSBCPct < 100) {
+      list = list.filter((c) => c.sbc_percent_of_fcf <= maxSBCPct)
+    }
+
+    list.sort((a, b) => {
+      let va = (a as any)[ownerYieldSortField] ?? 0
+      let vb = (b as any)[ownerYieldSortField] ?? 0
+      if (typeof va === 'boolean') {
+        va = va ? 1 : 0
+        vb = vb ? 1 : 0
+      }
+      if (typeof va === 'string') {
+        return ownerYieldSortAsc ? va.localeCompare(vb) : vb.localeCompare(va)
+      }
+      return ownerYieldSortAsc ? va - vb : vb - va
+    })
+
+    return list
+  }, [
+    ownerYieldData,
+    selectedSector,
+    ownerYieldPreset,
+    search,
+    minOwnerYield,
+    minOwnerAdjROIC,
+    maxSBCPct,
+    ownerYieldSortField,
+    ownerYieldSortAsc,
+  ])
+
+  const handleOwnerYieldSort = (field: keyof OwnerYieldCandidate) => {
+    if (ownerYieldSortField === field) {
+      setOwnerYieldSortAsc(!ownerYieldSortAsc)
+    } else {
+      setOwnerYieldSortField(field)
+      setOwnerYieldSortAsc(false)
+    }
+  }
+
+  const exportOwnerYieldCSV = () => {
+    const headers = [
+      'Rank',
+      'Ticker',
+      'Company',
+      'Sector',
+      'Owner Yield %',
+      'SBC-Adj FCF Yield %',
+      'FCF Yield %',
+      'SBC Drag %',
+      'Price ($)',
+      'Market Cap ($)',
+      'Adjusted Owner Earnings ($)',
+      'Reported FCF ($)',
+      'SBC ($)',
+      'SBC % of FCF',
+      'Adj. ROIC %',
+      'GAAP P/E',
+      'Hurdle Status (≥6.84%)',
+      'Yield Tier',
+    ]
+    const rows = [headers]
+    filteredOwnerYield.forEach((c, idx) => {
+      rows.push([
+        (idx + 1).toString(),
+        c.ticker,
+        `"${c.company.replace(/"/g, '""')}"`,
+        `"${c.sector}"`,
+        (c.owner_yield * 100).toFixed(2),
+        (c.standard_owner_yield * 100).toFixed(2),
+        (c.fcf_yield * 100).toFixed(2),
+        (c.yield_spread * 100).toFixed(2),
+        c.price.toFixed(2),
+        c.market_cap.toString(),
+        c.adjusted_owner_earnings.toString(),
+        c.fcf.toString(),
+        c.sbc.toString(),
+        c.sbc_percent_of_fcf.toFixed(1),
+        c.has_adjusted_roic ? (c.adjusted_roic * 100).toFixed(2) : '',
+        c.has_gaap_pe ? c.gaap_pe.toFixed(1) : '',
+        c.beats_hurdle ? 'BEATS_HURDLE' : 'BELOW_HURDLE',
+        `"${c.yield_tier}"`,
+      ])
+    })
+    const csvContent =
+      'data:text/csv;charset=utf-8,' +
+      rows.map((r) => r.join(',')).join('\n')
+    const encoded = encodeURI(csvContent)
+    const link = document.createElement('a')
+    link.href = encoded
+    link.download = `sec_owner_yield_ranking_${new Date().toISOString().split('T')[0]}.csv`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+
   return (
     <div className="space-y-4 animate-in fade-in duration-150 font-sans">
       {/* Header & Mode Switcher */}
@@ -379,6 +723,20 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
           </button>
 
           <button
+            onClick={() => setViewMode('owner-yield')}
+            className={`px-3 py-1.5 rounded transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+              viewMode === 'owner-yield'
+                ? 'bg-neutral-900 text-white dark:bg-white dark:text-black font-medium'
+                : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white border border-transparent hover:border-neutral-200 dark:border-neutral-800'
+            }`}
+          >
+            <span>Owner Yield Rank</span>
+            <span className="px-1 py-0.2 rounded text-[10px] font-mono bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+              Buffett
+            </span>
+          </button>
+
+          <button
             onClick={() => setViewMode('scatter')}
             className={`px-3 py-1.5 rounded transition-colors whitespace-nowrap ${
               viewMode === 'scatter'
@@ -387,6 +745,17 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
             }`}
           >
             Quality Matrix
+          </button>
+
+          <button
+            onClick={() => setViewMode('quality-discount')}
+            className={`px-3 py-1.5 rounded transition-colors whitespace-nowrap ${
+              viewMode === 'quality-discount'
+                ? 'bg-neutral-900 text-white dark:bg-white dark:text-black font-medium'
+                : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white border border-transparent hover:border-neutral-200 dark:border-neutral-800'
+            }`}
+          >
+            Quality at a Discount
           </button>
 
           <button
@@ -478,6 +847,58 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
           </div>
         )}
 
+        {/* Preset Filter Pills & Controls for Owner Yield Mode */}
+        {viewMode === 'owner-yield' && (
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
+            {[
+              { id: 'all', label: 'All Ranked' },
+              { id: 'hurdle', label: 'Beats Hurdle (≥ 6.8%)' },
+              { id: 'franchise', label: 'Franchise Yield (≥ 8%)' },
+              { id: 'low-sbc', label: 'Low SBC Drag (< 15%)' },
+              { id: 'high-roic', label: 'Moat (Adj ROIC ≥ 15%)' },
+            ].map((p) => (
+              <button
+                key={p.id}
+                onClick={() => setOwnerYieldPreset(p.id as any)}
+                className={`px-2 py-1 rounded transition-colors border ${
+                  ownerYieldPreset === p.id
+                    ? 'border-neutral-900 dark:border-white bg-neutral-900 text-white dark:bg-white dark:text-black font-medium'
+                    : 'border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+
+            <div className="h-4 w-px bg-neutral-200 dark:bg-neutral-800 mx-1 hidden sm:block" />
+
+            <button
+              onClick={() => setShowOwnerYieldFilters(!showOwnerYieldFilters)}
+              className={`flex items-center gap-1 px-2 py-1 rounded transition-colors border ${
+                showOwnerYieldFilters || minOwnerYield > 0 || minOwnerAdjROIC > -5 || maxSBCPct < 100
+                  ? 'border-neutral-900 dark:border-white bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-white font-medium'
+                  : 'border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
+              }`}
+              title="Toggle Owner Yield Range Filters"
+            >
+              <Sliders className="w-3 h-3" />
+              <span>Filters</span>
+              {(minOwnerYield > 0 || minOwnerAdjROIC > -5 || maxSBCPct < 100) && (
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+              )}
+            </button>
+
+            <button
+              onClick={exportOwnerYieldCSV}
+              className="flex items-center gap-1 px-2 py-1 rounded transition-colors border border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white hover:border-neutral-300 dark:hover:border-neutral-700"
+              title="Export Owner Yield Ranking to CSV"
+            >
+              <Download className="w-3 h-3" />
+              <span>CSV</span>
+            </button>
+          </div>
+        )}
+
         <div className="flex items-center gap-2 self-start md:self-auto w-full md:w-auto">
           {/* Sector Selector */}
           <div className="relative">
@@ -489,6 +910,12 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
               <option value="ALL">All Sectors</option>
               {viewMode === 'ranked'
                 ? sectorOptions.map((sec) => (
+                    <option key={sec} value={sec}>
+                      {sec}
+                    </option>
+                  ))
+                : viewMode === 'owner-yield'
+                ? ownerYieldSectorOptions.map((sec) => (
                     <option key={sec} value={sec}>
                       {sec}
                     </option>
@@ -605,6 +1032,95 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
         </div>
       )}
 
+      {/* Advanced Quantitative Filters Drawer for Owner Yield */}
+      {viewMode === 'owner-yield' && showOwnerYieldFilters && (
+        <div className="p-3.5 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50/80 dark:bg-neutral-900/50 backdrop-blur-sm grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs font-mono animate-in fade-in duration-150">
+          <div>
+            <div className="flex justify-between items-center text-neutral-600 dark:text-neutral-400 mb-1">
+              <span>Min Owner Yield (%)</span>
+              <span className="font-semibold text-neutral-900 dark:text-white">
+                {minOwnerYield > 0 ? `${minOwnerYield}%` : 'Off'}
+              </span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="20"
+              step="1"
+              value={minOwnerYield}
+              onChange={(e) => setMinOwnerYield(Number(e.target.value))}
+              className="w-full accent-neutral-900 dark:accent-white cursor-pointer"
+            />
+            <div className="flex justify-between text-[10px] text-neutral-400">
+              <span>0%</span>
+              <span>10%</span>
+              <span>20%</span>
+            </div>
+          </div>
+
+          <div>
+            <div className="flex justify-between items-center text-neutral-600 dark:text-neutral-400 mb-1">
+              <span>Min Adj. ROIC (%)</span>
+              <span className="font-semibold text-neutral-900 dark:text-white">
+                {minOwnerAdjROIC > -5 ? `${minOwnerAdjROIC}%` : 'Off'}
+              </span>
+            </div>
+            <input
+              type="range"
+              min="-5"
+              max="35"
+              step="5"
+              value={minOwnerAdjROIC}
+              onChange={(e) => setMinOwnerAdjROIC(Number(e.target.value))}
+              className="w-full accent-neutral-900 dark:accent-white cursor-pointer"
+            />
+            <div className="flex justify-between text-[10px] text-neutral-400">
+              <span>Any</span>
+              <span>15%</span>
+              <span>35%</span>
+            </div>
+          </div>
+
+          <div>
+            <div className="flex justify-between items-center text-neutral-600 dark:text-neutral-400 mb-1">
+              <span>Max SBC Drag (% of FCF)</span>
+              <span className="font-semibold text-neutral-900 dark:text-white">
+                {maxSBCPct < 100 ? `${maxSBCPct}%` : 'Off'}
+              </span>
+            </div>
+            <input
+              type="range"
+              min="10"
+              max="100"
+              step="10"
+              value={maxSBCPct}
+              onChange={(e) => setMaxSBCPct(Number(e.target.value))}
+              className="w-full accent-neutral-900 dark:accent-white cursor-pointer"
+            />
+            <div className="flex justify-between text-[10px] text-neutral-400">
+              <span>10%</span>
+              <span>50%</span>
+              <span>Any</span>
+            </div>
+          </div>
+
+          {(minOwnerYield > 0 || minOwnerAdjROIC > -5 || maxSBCPct < 100) && (
+            <div className="sm:col-span-3 flex justify-end pt-1">
+              <button
+                onClick={() => {
+                  setMinOwnerYield(0)
+                  setMinOwnerAdjROIC(-5)
+                  setMaxSBCPct(100)
+                }}
+                className="text-[11px] text-neutral-500 hover:text-rose-500 transition-colors underline underline-offset-2"
+              >
+                Reset Range Filters
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ========================================================= */}
       {/* RANKED VIEW TABLE */}
       {/* ========================================================= */}
@@ -687,6 +1203,31 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
                   <tr>
                     <td colSpan={9} className="py-12 text-center text-neutral-500 font-mono">
                       Computing 5-year multi-factor ranks across {companies.length || 'all'} companies...
+                    </td>
+                  </tr>
+                )}
+
+                {!loadingRank && filteredRanked.length === 0 && (
+                  <tr>
+                    <td colSpan={9} className="py-12 text-center text-neutral-400 font-mono">
+                      <div className="space-y-3 max-w-md mx-auto">
+                        <div className="text-xs">
+                          {search.trim()
+                            ? `No companies match "${search}" within the 528 Buffett Compounder Quality Screen.`
+                            : 'No companies match the selected screener criteria.'}
+                        </div>
+                        {search.trim() && filteredDirectory.length > 0 && (
+                          <div>
+                            <button
+                              onClick={() => setViewMode('directory')}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-neutral-900 text-white dark:bg-white dark:text-black text-xs font-mono font-medium hover:opacity-90 transition-opacity"
+                            >
+                              <span>View {filteredDirectory.length.toLocaleString()} matching companies in SEC Directory</span>
+                              <ArrowRight className="w-3 h-3" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 )}
@@ -799,6 +1340,287 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* OWNER YIELD RANKING VIEW TABLE */}
+      {/* ========================================================= */}
+      {viewMode === 'owner-yield' && (
+        <div className="space-y-4">
+          {/* Executive Benchmark Summary Header */}
+          <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-gradient-to-r from-amber-50/50 via-white to-emerald-50/30 dark:from-amber-950/20 dark:via-neutral-950 dark:to-emerald-950/20 p-4">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-neutral-950 dark:text-white uppercase tracking-wider text-xs font-mono">
+                    Owner Earnings Yield Ranking
+                  </span>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-mono font-medium bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20">
+                    Buffett & Damodaran Modern Franchise Standard
+                  </span>
+                </div>
+                <p className="text-neutral-600 dark:text-neutral-400 font-sans mt-1 text-xs max-w-3xl">
+                  Ranks businesses by intangible-adjusted owner earnings yield:{' '}
+                  <span className="font-mono text-neutral-900 dark:text-neutral-200 font-medium">
+                    (FCF − SBC + Net Intangibles) / Market Cap
+                  </span>
+                  . Reveals true cash generation after subtracting stock dilution and adding back capitalized brand and software investments.
+                </p>
+              </div>
+
+              {/* Hurdle Rate Stat Badges */}
+              <div className="flex flex-wrap items-center gap-2 text-xs font-mono shrink-0">
+                <div className="px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white/80 dark:bg-neutral-900/80">
+                  <span className="text-[10px] text-neutral-400 block">10Y Benchmark Hurdle</span>
+                  <span className="font-bold text-neutral-900 dark:text-white">
+                    {ownerYieldData ? `${(ownerYieldData.hurdle_rate * 100).toFixed(2)}%` : '6.84%'}
+                  </span>
+                </div>
+                <div className="px-3 py-2 rounded-lg border border-emerald-300 dark:border-emerald-800/80 bg-emerald-50/80 dark:bg-emerald-950/40">
+                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 block">Beating Hurdle</span>
+                  <span className="font-bold text-emerald-700 dark:text-emerald-300">
+                    {ownerYieldData ? `${ownerYieldData.beats_count} / ${ownerYieldData.total}` : '—'}
+                  </span>
+                </div>
+                <div className="px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white/80 dark:bg-neutral-900/80">
+                  <span className="text-[10px] text-neutral-400 block">Universe Median Yield</span>
+                  <span className="font-bold text-neutral-900 dark:text-white">
+                    {ownerYieldData && ownerYieldData.median_yield ? `${(ownerYieldData.median_yield * 100).toFixed(1)}%` : '—'}
+                  </span>
+                </div>
+                <div className="px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white/80 dark:bg-neutral-900/80">
+                  <span className="text-[10px] text-neutral-400 block">Top Yield</span>
+                  <span className="font-bold text-neutral-900 dark:text-white">
+                    {ownerYieldData && ownerYieldData.top_yield ? `${(ownerYieldData.top_yield * 100).toFixed(1)}%` : '—'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {loadingOwnerYield ? (
+            <div className="py-24 text-center font-mono text-xs text-neutral-400">
+              Evaluating Owner Earnings Yield across universe with live market valuations...
+            </div>
+          ) : ownerYieldError ? (
+            <div className="p-4 border border-rose-300 dark:border-rose-900/40 bg-rose-50 dark:bg-rose-950/20 text-xs text-rose-700 dark:text-rose-300 font-mono rounded-lg">
+              {ownerYieldError}
+            </div>
+          ) : (
+            <div className="rounded-xl border border-neutral-200 dark:border-neutral-800/80 bg-neutral-50/50 dark:bg-neutral-950/40 overflow-hidden">
+              <div className="px-5 py-3 border-b border-neutral-200 dark:border-neutral-800/80 bg-neutral-100/50 dark:bg-neutral-900/40 flex justify-between items-center text-xs font-mono">
+                <span className="text-neutral-900 dark:text-white font-medium">
+                  Showing {filteredOwnerYield.length} Ranked Companies by Owner Yield
+                </span>
+                <span className="text-neutral-500 text-[11px]">
+                  Sorted by {ownerYieldSortField.replace(/_/g, ' ')} ({ownerYieldSortAsc ? 'Ascending' : 'Descending'}) • Click row to inspect
+                </span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs font-mono">
+                  <thead>
+                    <tr className="border-b border-neutral-200 dark:border-neutral-800 text-neutral-500 bg-neutral-100/30 dark:bg-neutral-900/20">
+                      <th className="py-2.5 px-3 font-normal w-12 text-center">Rank</th>
+                      <th className="py-2.5 px-3 font-normal">Company</th>
+                      <th
+                        className="py-2.5 px-3 font-normal text-right cursor-pointer hover:text-neutral-900 dark:hover:text-white transition-colors"
+                        onClick={() => handleOwnerYieldSort('owner_yield')}
+                      >
+                        <div className="flex items-center justify-end gap-1 font-semibold text-neutral-950 dark:text-white">
+                          <span>Owner Yield</span>
+                          <ArrowUpDown className="w-3 h-3 text-amber-500" />
+                        </div>
+                      </th>
+                      <th
+                        className="py-2.5 px-3 font-normal text-right cursor-pointer hover:text-neutral-900 dark:hover:text-white transition-colors"
+                        onClick={() => handleOwnerYieldSort('standard_owner_yield')}
+                      >
+                        <div className="flex items-center justify-end gap-1">
+                          <span>SBC-Adj FCF Yld</span>
+                          <ArrowUpDown className="w-3 h-3" />
+                        </div>
+                      </th>
+                      <th
+                        className="py-2.5 px-3 font-normal text-right cursor-pointer hover:text-neutral-900 dark:hover:text-white transition-colors"
+                        onClick={() => handleOwnerYieldSort('fcf_yield')}
+                      >
+                        <div className="flex items-center justify-end gap-1">
+                          <span>FCF Yield</span>
+                          <ArrowUpDown className="w-3 h-3" />
+                        </div>
+                      </th>
+                      <th
+                        className="py-2.5 px-3 font-normal text-right cursor-pointer hover:text-neutral-900 dark:hover:text-white transition-colors"
+                        onClick={() => handleOwnerYieldSort('yield_spread')}
+                        title="Stock-Based Compensation dilution impact (FCF Yield minus SBC-Adjusted Yield)"
+                      >
+                        <div className="flex items-center justify-end gap-1">
+                          <span>SBC Drag</span>
+                          <ArrowUpDown className="w-3 h-3" />
+                        </div>
+                      </th>
+                      <th
+                        className="py-2.5 px-3 font-normal text-right cursor-pointer hover:text-neutral-900 dark:hover:text-white transition-colors"
+                        onClick={() => handleOwnerYieldSort('price')}
+                      >
+                        <div className="flex items-center justify-end gap-1">
+                          <span>Price</span>
+                          <ArrowUpDown className="w-3 h-3" />
+                        </div>
+                      </th>
+                      <th
+                        className="py-2.5 px-3 font-normal text-right cursor-pointer hover:text-neutral-900 dark:hover:text-white transition-colors"
+                        onClick={() => handleOwnerYieldSort('market_cap')}
+                      >
+                        <div className="flex items-center justify-end gap-1">
+                          <span>Market Cap</span>
+                          <ArrowUpDown className="w-3 h-3" />
+                        </div>
+                      </th>
+                      <th
+                        className="py-2.5 px-3 font-normal text-right cursor-pointer hover:text-neutral-900 dark:hover:text-white transition-colors"
+                        onClick={() => handleOwnerYieldSort('adjusted_owner_earnings')}
+                      >
+                        <div className="flex items-center justify-end gap-1">
+                          <span>Owner Earnings</span>
+                          <ArrowUpDown className="w-3 h-3" />
+                        </div>
+                      </th>
+                      <th
+                        className="py-2.5 px-3 font-normal text-right cursor-pointer hover:text-neutral-900 dark:hover:text-white transition-colors"
+                        onClick={() => handleOwnerYieldSort('adjusted_roic')}
+                      >
+                        <div className="flex items-center justify-end gap-1">
+                          <span>Adj. ROIC</span>
+                          <ArrowUpDown className="w-3 h-3" />
+                        </div>
+                      </th>
+                      <th
+                        className="py-2.5 px-3 font-normal text-right cursor-pointer hover:text-neutral-900 dark:hover:text-white transition-colors"
+                        onClick={() => handleOwnerYieldSort('gaap_pe')}
+                      >
+                        <div className="flex items-center justify-end gap-1">
+                          <span>P/E</span>
+                          <ArrowUpDown className="w-3 h-3" />
+                        </div>
+                      </th>
+                      <th className="py-2.5 px-3 font-normal text-center">Hurdle Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-200 dark:divide-neutral-900">
+                    {filteredOwnerYield.length === 0 ? (
+                      <tr>
+                        <td colSpan={12} className="py-12 text-center text-neutral-400 font-mono">
+                          No companies match the selected Owner Yield criteria.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredOwnerYield.map((c, idx) => {
+                        const isCurrent = c.ticker === currentTicker
+
+                        return (
+                          <tr
+                            key={c.ticker}
+                            onClick={() => onSelectTicker(c.ticker)}
+                            {...prefetchOnHover(c.ticker)}
+                            className={`cursor-pointer transition-colors ${
+                              isCurrent
+                                ? 'bg-neutral-100 dark:bg-neutral-900 font-medium'
+                                : 'hover:bg-neutral-100/50 dark:hover:bg-neutral-900/50'
+                            }`}
+                          >
+                            <td className="py-2.5 px-3 text-center text-neutral-400 tabular-nums">
+                              {idx + 1}
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-semibold text-neutral-950 dark:text-white font-mono">
+                                  {c.ticker}
+                                </span>
+                                <span className="text-neutral-500 font-sans text-xs truncate max-w-[150px]">
+                                  {c.company}
+                                </span>
+                                <span className="text-[10px] text-neutral-400 font-mono hidden xl:inline">
+                                  ({c.sector})
+                                </span>
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-3 text-right tabular-nums">
+                              <span
+                                className={`px-2 py-0.5 rounded font-bold ${
+                                  c.owner_yield >= 0.08
+                                    ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800'
+                                    : c.beats_hurdle
+                                    ? 'bg-blue-100 dark:bg-blue-950/60 text-blue-800 dark:text-blue-300 border border-blue-300 dark:border-blue-800'
+                                    : c.owner_yield >= 0.04
+                                    ? 'bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800'
+                                    : 'text-neutral-500'
+                                }`}
+                              >
+                                {(c.owner_yield * 100).toFixed(1)}%
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-right tabular-nums text-neutral-700 dark:text-neutral-300">
+                              {(c.standard_owner_yield * 100).toFixed(1)}%
+                            </td>
+                            <td className="py-2.5 px-3 text-right tabular-nums text-neutral-700 dark:text-neutral-300">
+                              {(c.fcf_yield * 100).toFixed(1)}%
+                            </td>
+                            <td className="py-2.5 px-3 text-right tabular-nums">
+                              {c.yield_spread > 0.001 ? (
+                                <span
+                                  className={`text-[11px] ${
+                                    c.yield_spread >= 0.02
+                                      ? 'text-rose-600 dark:text-rose-400 font-medium'
+                                      : 'text-amber-600 dark:text-amber-400'
+                                  }`}
+                                  title={`SBC is ${c.sbc_percent_of_fcf.toFixed(1)}% of reported FCF`}
+                                >
+                                  -{(c.yield_spread * 100).toFixed(1)}%
+                                </span>
+                              ) : (
+                                <span className="text-neutral-400 text-[11px]">0.0%</span>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3 text-right tabular-nums text-neutral-900 dark:text-white">
+                              ${c.price.toFixed(2)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right tabular-nums text-neutral-700 dark:text-neutral-300">
+                              {formatCurrency(c.market_cap, true, c.currency)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right tabular-nums text-neutral-700 dark:text-neutral-300">
+                              {formatCurrency(c.adjusted_owner_earnings, true, c.currency)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right tabular-nums font-medium text-neutral-900 dark:text-white">
+                              {c.has_adjusted_roic ? `${(c.adjusted_roic * 100).toFixed(1)}%` : '—'}
+                            </td>
+                            <td className="py-2.5 px-3 text-right tabular-nums text-neutral-700 dark:text-neutral-300">
+                              {c.has_gaap_pe ? `${c.gaap_pe.toFixed(1)}x` : c.gaap_pe === 0 ? 'Loss' : '—'}
+                            </td>
+                            <td className="py-2.5 px-3 text-center">
+                              <span
+                                className={`px-1.5 py-0.5 rounded text-[10px] whitespace-nowrap font-semibold ${
+                                  c.owner_yield >= 0.08
+                                    ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800'
+                                    : c.beats_hurdle
+                                    ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border border-blue-300 dark:border-blue-800'
+                                    : 'bg-neutral-100 dark:bg-neutral-900 text-neutral-500 border border-neutral-200 dark:border-neutral-800'
+                                }`}
+                              >
+                                {c.yield_tier}
+                              </span>
+                            </td>
+                          </tr>
+                        )
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -993,6 +1815,252 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
       })()}
 
       {/* ========================================================= */}
+      {/* QUALITY-AT-A-DISCOUNT (QAAD) SCREENER VIEW */}
+      {/* ========================================================= */}
+      {viewMode === 'quality-discount' && (
+        <div className="space-y-3">
+          {/* Section Header */}
+          <div className="border border-neutral-200 dark:border-neutral-800 p-4 bg-neutral-50/50 dark:bg-neutral-950 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono">
+            <div>
+              <span className="font-semibold text-neutral-900 dark:text-white uppercase tracking-wider text-[11px] block">
+                Quality-at-a-Discount (QaaD) Screener
+              </span>
+              <p className="text-neutral-500 font-sans mt-0.5 text-xs">
+                Warren Buffett & Charlie Munger framework: Wonderful businesses with high multi-year returns on capital trading at deep discounts to DCF intrinsic value.
+              </p>
+            </div>
+            <div className="text-[11px] text-neutral-400 font-mono">
+              Margin of Safety ≥ 10% • 5Y ROIC ≥ 12%
+            </div>
+          </div>
+
+          {loadingDiscount ? (
+            <div className="py-24 text-center font-mono text-xs text-neutral-400">
+              Evaluating forward DCF & intrinsic margin of safety across database...
+            </div>
+          ) : discountError ? (
+            <div className="p-4 border border-rose-300 dark:border-rose-900/40 bg-rose-50 dark:bg-rose-950/20 text-xs text-rose-700 dark:text-rose-300 font-mono">
+              {discountError}
+            </div>
+          ) : (
+            <div className="border border-neutral-200 dark:border-neutral-800 overflow-hidden bg-white dark:bg-black">
+              <div className="px-4 py-2 border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 flex justify-between items-center text-xs font-mono">
+                <span className="text-neutral-900 dark:text-white font-medium">
+                  Showing {filteredDiscount.length} Quality-at-a-Discount Compounders
+                </span>
+                <span className="text-neutral-400 text-[11px]">
+                  Click row to inspect DCF bridge & statements
+                </span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs font-mono">
+                  <thead>
+                    <tr className="border-b border-neutral-200 dark:border-neutral-800 text-neutral-400 bg-neutral-50/50 dark:bg-neutral-950">
+                      <th className="py-2 px-3 font-normal w-10 text-center">#</th>
+                      <th
+                        className="py-2 px-3 font-normal cursor-pointer hover:text-neutral-900 dark:hover:text-white transition-colors"
+                        onClick={() => handleDiscountSort('qaad_score')}
+                      >
+                        <div className="flex items-center gap-1">
+                          <span>QAAD Score</span>
+                          <ArrowUpDown className="w-3 h-3" />
+                        </div>
+                      </th>
+                      <th className="py-2 px-3 font-normal">Company</th>
+                      <th
+                        className="py-2 px-3 font-normal text-right cursor-pointer hover:text-neutral-900 dark:hover:text-white transition-colors"
+                        onClick={() => handleDiscountSort('price')}
+                      >
+                        <div className="flex items-center justify-end gap-1">
+                          <span>Market Price</span>
+                          <ArrowUpDown className="w-3 h-3" />
+                        </div>
+                      </th>
+                      <th
+                        className="py-2 px-3 font-normal text-right cursor-pointer hover:text-neutral-900 dark:hover:text-white transition-colors"
+                        onClick={() => handleDiscountSort('dcf_value')}
+                      >
+                        <div className="flex items-center justify-end gap-1">
+                          <span>DCF Intrinsic</span>
+                          <ArrowUpDown className="w-3 h-3" />
+                        </div>
+                      </th>
+                      <th
+                        className="py-2 px-3 font-normal text-right cursor-pointer hover:text-neutral-900 dark:hover:text-white transition-colors"
+                        onClick={() => handleDiscountSort('discount')}
+                      >
+                        <div className="flex items-center justify-end gap-1">
+                          <span>Margin of Safety</span>
+                          <ArrowUpDown className="w-3 h-3" />
+                        </div>
+                      </th>
+                      <th
+                        className="py-2 px-3 font-normal text-right cursor-pointer hover:text-neutral-900 dark:hover:text-white transition-colors"
+                        onClick={() => handleDiscountSort('upside')}
+                      >
+                        <div className="flex items-center justify-end gap-1">
+                          <span>DCF Upside</span>
+                          <ArrowUpDown className="w-3 h-3" />
+                        </div>
+                      </th>
+                      <th
+                        className="py-2 px-3 font-normal text-right cursor-pointer hover:text-neutral-900 dark:hover:text-white transition-colors"
+                        onClick={() => handleDiscountSort('quality_score')}
+                      >
+                        <div className="flex items-center justify-end gap-1">
+                          <span>Quality Score</span>
+                          <ArrowUpDown className="w-3 h-3" />
+                        </div>
+                      </th>
+                      <th
+                        className="py-2 px-3 font-normal text-right cursor-pointer hover:text-neutral-900 dark:hover:text-white transition-colors"
+                        onClick={() => handleDiscountSort('roic')}
+                      >
+                        <div className="flex items-center justify-end gap-1">
+                          <span>ROIC (5Y)</span>
+                          <ArrowUpDown className="w-3 h-3" />
+                        </div>
+                      </th>
+                      <th
+                        className="py-2 px-3 font-normal text-right cursor-pointer hover:text-neutral-900 dark:hover:text-white transition-colors"
+                        onClick={() => handleDiscountSort('fcf_yield')}
+                      >
+                        <div className="flex items-center justify-end gap-1">
+                          <span>FCF Yield</span>
+                          <ArrowUpDown className="w-3 h-3" />
+                        </div>
+                      </th>
+                      <th
+                        className="py-2 px-3 font-normal text-right cursor-pointer hover:text-neutral-900 dark:hover:text-white transition-colors"
+                        onClick={() => handleDiscountSort('ev_fcf')}
+                      >
+                        <div className="flex items-center justify-end gap-1">
+                          <span>EV / FCF</span>
+                          <ArrowUpDown className="w-3 h-3" />
+                        </div>
+                      </th>
+                      <th
+                        className="py-2 px-3 font-normal text-right cursor-pointer hover:text-neutral-900 dark:hover:text-white transition-colors"
+                        onClick={() => handleDiscountSort('alpha_spread')}
+                      >
+                        <div className="flex items-center justify-end gap-1">
+                          <span>Alpha Spread</span>
+                          <ArrowUpDown className="w-3 h-3" />
+                        </div>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-100 dark:divide-neutral-900">
+                    {filteredDiscount.map((c, idx) => {
+                      const isCurrent = c.ticker === currentTicker
+                      return (
+                        <tr
+                          key={c.ticker}
+                          onClick={() => onSelectTicker(c.ticker)}
+                          {...prefetchOnHover(c.ticker)}
+                          className={`cursor-pointer transition-colors ${
+                            isCurrent
+                              ? 'bg-neutral-100 dark:bg-neutral-900 font-medium'
+                              : 'hover:bg-neutral-50 dark:hover:bg-neutral-950'
+                          }`}
+                        >
+                          <td className="py-2 px-3 text-center text-neutral-400">
+                            {idx + 1}
+                          </td>
+                          <td className="py-2 px-3">
+                            <span
+                              className={`px-2 py-0.5 rounded text-[11px] font-semibold tabular-nums ${
+                                c.qaad_score >= 80
+                                  ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800'
+                                  : c.qaad_score >= 70
+                                  ? 'bg-blue-100 dark:bg-blue-950/60 text-blue-800 dark:text-blue-300 border border-blue-300 dark:border-blue-800'
+                                  : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300'
+                              }`}
+                            >
+                              {c.qaad_score.toFixed(1)}
+                            </span>
+                          </td>
+                          <td className="py-2 px-3">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-semibold text-neutral-950 dark:text-white font-mono">
+                                {c.ticker}
+                              </span>
+                              <span className="text-neutral-500 font-sans text-xs truncate max-w-[150px]">
+                                {c.company}
+                              </span>
+                              <span className="text-[10px] text-neutral-400 font-mono hidden xl:inline">
+                                ({c.sector})
+                              </span>
+                            </div>
+                          </td>
+                          <td className="py-2 px-3 text-right tabular-nums text-neutral-900 dark:text-white">
+                            ${c.price.toFixed(2)}
+                          </td>
+                          <td className="py-2 px-3 text-right tabular-nums font-semibold text-neutral-950 dark:text-white">
+                            ${c.dcf_value.toFixed(2)}
+                          </td>
+                          <td className="py-2 px-3 text-right tabular-nums">
+                            <span
+                              className={`font-semibold ${
+                                c.discount >= 0.20
+                                  ? 'text-emerald-600 dark:text-emerald-400'
+                                  : c.discount > 0
+                                  ? 'text-emerald-500'
+                                  : 'text-neutral-400'
+                              }`}
+                            >
+                              {c.discount > 0 ? `+${(c.discount * 100).toFixed(1)}%` : `${(c.discount * 100).toFixed(1)}%`}
+                            </span>
+                          </td>
+                          <td className="py-2 px-3 text-right tabular-nums text-neutral-700 dark:text-neutral-300 font-medium">
+                            {c.upside > 0 ? `+${(c.upside * 100).toFixed(1)}%` : `${(c.upside * 100).toFixed(1)}%`}
+                          </td>
+                          <td className="py-2 px-3 text-right tabular-nums text-neutral-900 dark:text-neutral-200">
+                            {c.quality_score.toFixed(1)}
+                          </td>
+                          <td className="py-2 px-3 text-right tabular-nums">
+                            <span className="font-medium text-neutral-900 dark:text-white">
+                              {c.has_adj_roic
+                                ? `${(c.adj_roic * 100).toFixed(1)}%*`
+                                : c.has_roic
+                                ? `${(c.roic * 100).toFixed(1)}%`
+                                : 'n/a'}
+                            </span>
+                          </td>
+                          <td className="py-2 px-3 text-right tabular-nums text-neutral-700 dark:text-neutral-300">
+                            {(c.fcf_yield * 100).toFixed(1)}%
+                          </td>
+                          <td className="py-2 px-3 text-right tabular-nums text-neutral-700 dark:text-neutral-300">
+                            {c.ev_fcf > 0 ? `${c.ev_fcf.toFixed(1)}x` : '—'}
+                          </td>
+                          <td className="py-2 px-3 text-right tabular-nums">
+                            {c.has_implied_growth ? (
+                              <span
+                                className={`font-medium ${
+                                  c.alpha_spread > 0
+                                    ? 'text-emerald-600 dark:text-emerald-400'
+                                    : 'text-neutral-400'
+                                }`}
+                              >
+                                {c.alpha_spread > 0 ? `+${(c.alpha_spread * 100).toFixed(1)}%` : `${(c.alpha_spread * 100).toFixed(1)}%`}
+                              </span>
+                            ) : (
+                              <span className="text-neutral-400">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ========================================================= */}
       {/* MODERN GAAP ARBITRAGE VIEW TABLE */}
       {/* ========================================================= */}
       {viewMode === 'gaap-arbitrage' && (
@@ -1085,6 +2153,15 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
                       </th>
                       <th
                         className="py-2 px-3 font-normal text-right cursor-pointer hover:text-neutral-900 dark:hover:text-white transition-colors"
+                        onClick={() => handleGAAPSort('owner_earnings_yield')}
+                      >
+                        <div className="flex items-center justify-end gap-1 font-semibold text-neutral-900 dark:text-white">
+                          <span>Owner Yield</span>
+                          <ArrowUpDown className="w-3 h-3 text-amber-500" />
+                        </div>
+                      </th>
+                      <th
+                        className="py-2 px-3 font-normal text-right cursor-pointer hover:text-neutral-900 dark:hover:text-white transition-colors"
                         onClick={() => handleGAAPSort('arbitrage_score')}
                       >
                         <div className="flex items-center justify-end gap-1">
@@ -1149,6 +2226,15 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
                             {formatCurrency(c.adjusted_owner_earnings, true, c.currency)}
                           </td>
                           <td className="py-2 px-3 text-right tabular-nums">
+                            {c.has_owner_earnings_yield ? (
+                              <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                                {(c.owner_earnings_yield * 100).toFixed(1)}%
+                              </span>
+                            ) : (
+                              <span className="text-neutral-400">—</span>
+                            )}
+                          </td>
+                          <td className="py-2 px-3 text-right tabular-nums">
                             <span className="font-semibold text-neutral-900 dark:text-white">
                               {c.arbitrage_score.toFixed(1)}
                             </span>
@@ -1171,7 +2257,7 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
         <div className="rounded-xl border border-neutral-200 dark:border-neutral-800/80 bg-neutral-50/50 dark:bg-neutral-950/40 overflow-hidden">
           <div className="px-5 py-3 border-b border-neutral-200 dark:border-neutral-800/80 bg-neutral-100/50 dark:bg-neutral-900/40 flex justify-between items-center text-xs font-mono">
             <span className="text-neutral-900 dark:text-white font-medium">
-              Showing {filteredDirectory.length} of {companies.length} Synced Companies
+              Showing {Math.min(directoryLimit, filteredDirectory.length).toLocaleString()} of {filteredDirectory.length.toLocaleString()} Companies ({companies.length.toLocaleString()} Total Listed)
             </span>
             <span className="text-neutral-500">Click row to inspect</span>
           </div>
@@ -1188,7 +2274,7 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-200 dark:divide-neutral-900">
-                {filteredDirectory.slice(0, 100).map((c) => {
+                {filteredDirectory.slice(0, directoryLimit).map((c) => {
                   const isCurrent = c.ticker === currentTicker
                   return (
                     <tr
@@ -1231,6 +2317,17 @@ export const UniverseScreener: React.FC<UniverseScreenerProps> = ({
               </tbody>
             </table>
           </div>
+
+          {filteredDirectory.length > directoryLimit && (
+            <div className="p-3 border-t border-neutral-200 dark:border-neutral-800 bg-neutral-100/30 dark:bg-neutral-900/20 text-center">
+              <button
+                onClick={() => setDirectoryLimit((prev) => prev + 150)}
+                className="px-4 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-200 dark:hover:bg-neutral-800 text-xs font-mono text-neutral-800 dark:text-neutral-200 transition-colors"
+              >
+                Load More Listed Companies (+150 of {filteredDirectory.length - directoryLimit} remaining)
+              </button>
+            </div>
+          )}
         </div>
       )}
 

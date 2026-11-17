@@ -9,9 +9,11 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"sec/internal/edgar"
+	"sec/internal/screener"
 	"sec/internal/store"
 )
 
@@ -65,6 +67,7 @@ func RunSync(parent context.Context, args []string, output, errorOutput io.Write
 	}
 	close(jobs)
 	var workersDone sync.WaitGroup
+	var syncedCount atomic.Int64
 	workersDone.Add(workerCount)
 	for range workerCount {
 		go func() {
@@ -86,6 +89,8 @@ func RunSync(parent context.Context, args []string, output, errorOutput io.Write
 				if err != nil {
 					fmt.Fprintf(safeErrorOutput, "Sync failed for %s: %v\n", job.ticker, err)
 					failures[job.index] = fmt.Errorf("%s: %w", job.ticker, err)
+				} else {
+					syncedCount.Add(1)
 				}
 			}
 		}()
@@ -93,6 +98,16 @@ func RunSync(parent context.Context, args []string, output, errorOutput io.Write
 	workersDone.Wait()
 	if err := parent.Err(); err != nil {
 		return err
+	}
+	if syncedCount.Load() > 0 {
+		for _, y := range screener.DefaultPrecomputeRankYears {
+			if _, err := screener.RefreshFullUniverseRankScores(parent, s, y); err != nil {
+				failures = append(failures, fmt.Errorf("refresh %dy rank scores: %w", y, err))
+			}
+		}
+		if err := s.BumpCacheEpoch(parent); err != nil {
+			failures = append(failures, err)
+		}
 	}
 	return errors.Join(failures...)
 }
@@ -136,6 +151,15 @@ func SyncCompany(ctx context.Context, client *edgar.Client, s *store.Store, tick
 	}
 	if err := s.SaveFilings(ctx, filings); err != nil {
 		return err
+	}
+	if err := screener.PrecomputeCompany(ctx, s, store.LocalCompany{
+		CIK:            cik,
+		Name:           companyName,
+		Ticker:         ticker,
+		SIC:            string(submissions.SIC),
+		SICDescription: submissions.SICDescription,
+	}); err != nil {
+		return fmt.Errorf("precompute variables for %s: %w", ticker, err)
 	}
 	_, err = fmt.Fprintf(output, "saved_facts=%d saved_filings=%d ticker=%s cik=%s database=%s\n", len(facts), len(filings), ticker, cik, databasePath)
 	return err
