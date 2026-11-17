@@ -15,7 +15,7 @@ import (
 
 func RunPrecompute(parent context.Context, args []string, output, errorOutput io.Writer) error {
 	flags := flag.NewFlagSet("precompute", flag.ContinueOnError)
-	SetFlagUsage(flags, errorOutput, "usage: sec precompute [TICKER...] [--universe FILE] [--force] [--workers N] [--data-dir DIR]")
+	SetFlagUsage(flags, errorOutput, "usage: sec cache rebuild [TICKER...] [--universe FILE] [--force] [--workers N] [--data-dir DIR]")
 	dataDir := flags.String("data-dir", store.DefaultDirectory(), "directory containing the shared SQLite database")
 	universeFile := flags.String("universe", "", "file containing one ticker per line")
 	force := flags.Bool("force", false, "recompute variables even for clean up-to-date companies")

@@ -13,7 +13,7 @@ import (
 )
 
 func TestFormulaEndpoints(t *testing.T) {
-	srv, err := NewServer("../../data/sec.db", "", nil)
+	srv, err := NewServer("../../data/sec.db")
 	if err != nil {
 		t.Skip("skipping integration test without local sec.db")
 		return

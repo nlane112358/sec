@@ -18,7 +18,7 @@ import (
 
 func RunQualityDiscount(parent context.Context, args []string, output, errorOutput io.Writer) error {
 	flags := flag.NewFlagSet("discount", flag.ContinueOnError)
-	SetFlagUsage(flags, errorOutput, "usage: sec discount [--prices FILE] [--fetch-prices] [--min-score 70] [--min-roic 12] [--min-discount 15] [--min-fcf-yield 0] [--require-buybacks] [--sort qaad|discount|quality|yield|upside] [--top N] [--universe FILE] [--data-dir DIR]")
+	SetFlagUsage(flags, errorOutput, "usage: sec screen discount [--prices FILE] [--fetch-prices] [--min-score 70] [--min-roic 12] [--min-discount 15] [--min-fcf-yield 0] [--require-buybacks] [--sort qaad|discount|quality|yield|upside] [--top N] [--universe FILE] [--data-dir DIR]")
 
 	pricesFile := flags.String("prices", "", "CSV/TSV or JSON file with ticker prices or market caps")
 	fetchPrices := flags.Bool("fetch-prices", false, "fetch live Yahoo Finance quotes (Stooq fallback) for candidates missing from --prices")
@@ -45,7 +45,7 @@ func RunQualityDiscount(parent context.Context, args []string, output, errorOutp
 	}
 
 	if len(flags.Args()) != 0 {
-		return errors.New("discount accepts tickers through --universe FILE")
+		return errors.New("discount screen accepts tickers through --universe FILE")
 	}
 
 	for name, value := range map[string]float64{

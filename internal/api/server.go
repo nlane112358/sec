@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -52,8 +51,6 @@ type cachedDiff struct {
 type Server struct {
 	storePath      string
 	store          *store.Store
-	staticFS       fs.FS
-	staticDir      string
 	startTime      time.Time
 	edgarClient    *edgar.Client
 	filingCacheDir string
@@ -86,7 +83,7 @@ type Server struct {
 	diffCache      map[string]cachedDiff
 }
 
-func NewServer(storePath string, staticDir string, staticFS fs.FS) (*Server, error) {
+func NewServer(storePath string) (*Server, error) {
 	ctx := context.Background()
 	s, err := store.Open(ctx, storePath)
 	if err != nil {
@@ -102,8 +99,6 @@ func NewServer(storePath string, staticDir string, staticFS fs.FS) (*Server, err
 	srv := &Server{
 		storePath:      storePath,
 		store:          s,
-		staticFS:       staticFS,
-		staticDir:      staticDir,
 		startTime:      time.Now(),
 		edgarClient:    edgar.NewClient(ua),
 		filingCacheDir: filingDir,
@@ -213,9 +208,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/formula", s.handleSECFormulaQuery)
 	mux.HandleFunc("GET /api/integrations/sheets/code", s.handleSheetsCode)
 	mux.HandleFunc("GET /api/integrations/excel/vba", s.handleExcelVBA)
-
-	// Static files / SPA fallback
-	mux.HandleFunc("GET /", s.handleSPA)
 
 	// Chain institutional middleware pipeline:
 	// 1. recovery (top-level panic barrier)
@@ -1627,15 +1619,15 @@ func (s *Server) handleCompanyQuote(w http.ResponseWriter, r *http.Request) {
 }
 
 type RawFactItem struct {
-	Taxonomy    string  `json:"taxonomy"`
-	Concept     string  `json:"concept"`
-	Label       string  `json:"label"`
-	PeriodEnd   string  `json:"period_end"`
-	Unit        string  `json:"unit"`
-	Value       float64 `json:"value"`
-	Form        string  `json:"form"`
-	FilingDate  string  `json:"filing_date"`
-	Accession   string  `json:"accession"`
+	Taxonomy   string  `json:"taxonomy"`
+	Concept    string  `json:"concept"`
+	Label      string  `json:"label"`
+	PeriodEnd  string  `json:"period_end"`
+	Unit       string  `json:"unit"`
+	Value      float64 `json:"value"`
+	Form       string  `json:"form"`
+	FilingDate string  `json:"filing_date"`
+	Accession  string  `json:"accession"`
 }
 
 type AuditResponse struct {
@@ -1760,51 +1752,4 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	s.statsMu.RUnlock()
 
 	writeJSON(w, http.StatusOK, res)
-}
-
-func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
-	if s.staticFS != nil {
-		f, err := s.staticFS.Open(strings.TrimPrefix(r.URL.Path, "/"))
-		if err == nil {
-			_ = f.Close()
-			http.FileServer(http.FS(s.staticFS)).ServeHTTP(w, r)
-			return
-		}
-		// Fallback to index.html for SPA client routes
-		indexData, err := fs.ReadFile(s.staticFS, "index.html")
-		if err == nil {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(indexData)
-			return
-		}
-	}
-
-	if s.staticDir != "" {
-		filePath := filepath.Join(s.staticDir, filepath.Clean(r.URL.Path))
-		if stat, err := os.Stat(filePath); err == nil && !stat.IsDir() {
-			http.ServeFile(w, r, filePath)
-			return
-		}
-		indexPath := filepath.Join(s.staticDir, "index.html")
-		if _, err := os.Stat(indexPath); err == nil {
-			http.ServeFile(w, r, indexPath)
-			return
-		}
-	}
-
-	// Default fallback message if no frontend is built yet
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = fmt.Fprint(w, `<!doctype html><html><body style="background:#09090b;color:#e4e4e7;font-family:sans-serif;padding:40px;">
-<h2>SEC EDGAR Backend Running</h2>
-<p>API endpoints available under <code>/api/...</code></p>
-<ul>
-  <li><a style="color:#38bdf8" href="/api/companies">/api/companies</a></li>
-  <li><a style="color:#38bdf8" href="/api/company/AAPL/summary">/api/company/AAPL/summary</a></li>
-  <li><a style="color:#38bdf8" href="/api/company/AAPL/dcf">/api/company/AAPL/dcf</a></li>
-  <li><a style="color:#38bdf8" href="/api/company/AAPL/filings">/api/company/AAPL/filings</a></li>
-  <li><a style="color:#38bdf8" href="/api/stats">/api/stats</a></li>
-</ul>
-</body></html>`)
 }

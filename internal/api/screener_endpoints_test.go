@@ -79,7 +79,7 @@ func TestScreenerEndpointsAndEpochInvalidation(t *testing.T) {
 	dbPath := filepath.Join(dir, "sec.db")
 	seedAPITestDB(t, dbPath)
 
-	srv, err := NewServer(dbPath, "", nil)
+	srv, err := NewServer(dbPath)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestRealDBScreenerEndpointsLatency(t *testing.T) {
 	if os.Getenv("SEC_TEST_REAL_DB") != "1" {
 		t.Skip("set SEC_TEST_REAL_DB=1 to benchmark API endpoints against ../../data/sec.db")
 	}
-	srv, err := NewServer("../../data/sec.db", "", nil)
+	srv, err := NewServer("../../data/sec.db")
 	if err != nil {
 		t.Fatalf("NewServer real db: %v", err)
 	}

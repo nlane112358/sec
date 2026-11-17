@@ -3,6 +3,7 @@ package commands
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -17,18 +18,40 @@ import (
 
 type UniverseInfo struct {
 	Name        string
-	Path        string
 	TotalCount  int
 	SyncedCount int
 	Description string
 }
 
 func RunUniverse(parent context.Context, args []string, output, errorOutput io.Writer) error {
+	mode := "status"
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		mode = args[0]
+		args = args[1:]
+	}
+	if mode != "list" && mode != "status" {
+		return fmt.Errorf("unknown universe command %q; choose list or status", mode)
+	}
+
 	flags := flag.NewFlagSet("universe", flag.ContinueOnError)
-	SetFlagUsage(flags, errorOutput, "usage: sec universe [list] [--data-dir DIR]")
+	SetFlagUsage(flags, errorOutput, "usage: sec universe [list|status] [--data-dir DIR]")
 	dataDir := flags.String("data-dir", store.DefaultDirectory(), "directory containing the shared SQLite database")
 	if err := ParseCommandFlags(flags, args, "data-dir"); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
+	}
+	if len(flags.Args()) != 0 {
+		return errors.New("universe accepts only the list or status subcommand")
+	}
+
+	universes, err := loadUniverses()
+	if err != nil {
+		return err
+	}
+	if mode == "list" {
+		return writeUniverseList(output, universes)
 	}
 
 	databasePath := SharedDatabasePath(*dataDir)
@@ -38,26 +61,41 @@ func RunUniverse(parent context.Context, args []string, output, errorOutput io.W
 	}
 	defer s.Close()
 
-	// Find universe files in universes/
-	universesDir := "universes"
+	for i := range universes {
+		for _, ticker := range universes[i].tickers {
+			if _, _, _, err := s.CompanyForTicker(parent, ticker); err == nil {
+				universes[i].SyncedCount++
+			}
+		}
+	}
+	return writeUniverseStatus(output, universes)
+}
+
+type universeRoster struct {
+	UniverseInfo
+	tickers []string
+}
+
+func loadUniverses() ([]universeRoster, error) {
+	const universesDir = "universes"
 	entries, err := os.ReadDir(universesDir)
 	if err != nil {
-		return fmt.Errorf("read universes dir: %w", err)
+		return nil, fmt.Errorf("read universes directory: %w", err)
 	}
 
 	descriptions := map[string]string{
-		"sp500.txt":                  "S&P 500 Large-Cap US Benchmark",
-		"nasdaq100.txt":              "Nasdaq 100 Tech & Growth Leaders",
-		"midcap400.txt":              "S&P MidCap 400 Core Mid-Caps",
-		"russell2000.txt":            "Russell 2000 US Small-Cap Universe",
-		"adr_foreign.txt":            "Global Foreign ADRs (Form 20-F / 40-F Cross-Border Filers)",
-		"broad_market_3000.txt":      "Broad Market 3000+ (S&P 500, MidCap 400, Russell 2000, Foreign ADRs)",
-		"russell3000.txt":            "Russell 3000 Comprehensive US Investable Universe",
+		"sp500.txt":                   "S&P 500 Large-Cap US Benchmark",
+		"nasdaq100.txt":               "Nasdaq 100 Tech & Growth Leaders",
+		"midcap400.txt":               "S&P MidCap 400 Core Mid-Caps",
+		"russell2000.txt":             "Russell 2000 US Small-Cap Universe",
+		"adr_foreign.txt":             "Global Foreign ADRs (Form 20-F / 40-F Cross-Border Filers)",
+		"broad_market_3000.txt":       "Broad Market 3000+ (S&P 500, MidCap 400, Russell 2000, Foreign ADRs)",
+		"russell3000.txt":             "Russell 3000 Comprehensive US Investable Universe",
 		"euro_uk_compounders_20f.txt": "European & UK Compounders (Form 20-F Filers)",
-		"all-tickers.txt":            "Full SEC EDGAR Master Ticker Directory (~10,000+ filers)",
+		"all-tickers.txt":             "Full SEC EDGAR Master Ticker Directory (~10,000+ filers)",
 	}
 
-	var results []UniverseInfo
+	var results []universeRoster
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".txt") {
 			continue
@@ -68,49 +106,56 @@ func RunUniverse(parent context.Context, args []string, output, errorOutput io.W
 			continue
 		}
 
-		syncedCount := 0
-		for _, ticker := range tickers {
-			if _, _, _, err := s.CompanyForTicker(parent, ticker); err == nil {
-				syncedCount++
-			}
-		}
-
 		desc := descriptions[entry.Name()]
 		if desc == "" {
 			desc = "Custom Universe"
 		}
 
 		name := strings.TrimSuffix(entry.Name(), ".txt")
-		results = append(results, UniverseInfo{
-			Name:        name,
-			Path:        path,
-			TotalCount:  len(tickers),
-			SyncedCount: syncedCount,
-			Description: desc,
+		results = append(results, universeRoster{
+			UniverseInfo: UniverseInfo{
+				Name:        name,
+				TotalCount:  len(tickers),
+				Description: desc,
+			},
+			tickers: tickers,
 		})
 	}
 
 	sort.Slice(results, func(i, j int) bool {
-		return results[i].TotalCount < results[j].TotalCount
+		return results[i].Name < results[j].Name
 	})
+	return results, nil
+}
 
+func writeUniverseList(output io.Writer, universes []universeRoster) error {
 	tw := tabwriter.NewWriter(output, 0, 4, 3, ' ', 0)
-	fmt.Fprintln(tw, "UNIVERSE\tTICKERS\tSYNCED IN DB\tDESCRIPTION")
-	for _, u := range results {
+	if _, err := fmt.Fprintln(tw, "UNIVERSE\tTICKERS\tDESCRIPTION"); err != nil {
+		return err
+	}
+	for _, u := range universes {
+		if _, err := fmt.Fprintf(tw, "%s\t%d\t%s\n", u.Name, u.TotalCount, u.Description); err != nil {
+			return err
+		}
+	}
+	return tw.Flush()
+}
+
+func writeUniverseStatus(output io.Writer, universes []universeRoster) error {
+	tw := tabwriter.NewWriter(output, 0, 4, 3, ' ', 0)
+	if _, err := fmt.Fprintln(tw, "UNIVERSE\tTICKERS\tSYNCED\tCOVERAGE"); err != nil {
+		return err
+	}
+	for _, u := range universes {
 		pct := 0.0
 		if u.TotalCount > 0 {
 			pct = float64(u.SyncedCount) / float64(u.TotalCount) * 100
 		}
-		fmt.Fprintf(tw, "%s\t%d\t%d (%.1f%%)\t%s\n", u.Name, u.TotalCount, u.SyncedCount, pct, u.Description)
+		if _, err := fmt.Fprintf(tw, "%s\t%d\t%d\t%.1f%%\n", u.Name, u.TotalCount, u.SyncedCount, pct); err != nil {
+			return err
+		}
 	}
-	tw.Flush()
-
-	fmt.Fprintln(output, "\nSync any universe:")
-	fmt.Fprintln(output, "  ./sec sync --universe russell2000 --skip-existing")
-	fmt.Fprintln(output, "  ./sec sync --universe midcap400 --skip-existing")
-	fmt.Fprintln(output, "  ./sec sync --universe adr_foreign --skip-existing")
-	fmt.Fprintln(output, "  ./sec sync --universe broad_market_3000 --skip-existing")
-	return nil
+	return tw.Flush()
 }
 
 func readTickersFromFile(path string) ([]string, error) {

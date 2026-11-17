@@ -38,7 +38,7 @@ func (s *Store) CacheEpoch(ctx context.Context) (int64, error) {
 }
 
 // BumpCacheEpoch increments cache_epoch in sec_meta so external processes
-// (such as sec serve) detect database updates made by sync or precompute.
+// can detect database updates made by sync or precompute.
 func (s *Store) BumpCacheEpoch(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return nil

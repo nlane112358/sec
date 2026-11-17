@@ -17,7 +17,7 @@ import (
 
 func RunModernGAAPArbitrage(parent context.Context, args []string, output, errorOutput io.Writer) error {
 	flags := flag.NewFlagSet("gaap-arbitrage", flag.ContinueOnError)
-	SetFlagUsage(flags, errorOutput, "usage: sec gaap-arbitrage [--prices FILE] [--fetch-prices] [--min-adj-roic 15] [--min-yield 3.5] [--surging] [--screen-expensive] [--max-gaap-roic PCT] [--sort yield|roic|spread|score] [--include-financials] [--universe FILE] [--years N] [--data-dir DIR]")
+	SetFlagUsage(flags, errorOutput, "usage: sec screen intangible [--prices FILE] [--fetch-prices] [--min-adj-roic 15] [--min-yield 3.5] [--surging] [--screen-expensive] [--max-gaap-roic PCT] [--sort yield|roic|spread|score] [--include-financials] [--universe FILE] [--years N] [--data-dir DIR]")
 	pricesFile := flags.String("prices", "", "CSV/TSV or JSON file with ticker prices or market caps")
 	fetchPrices := flags.Bool("fetch-prices", false, "fetch live Yahoo Finance quotes (Stooq fallback) for candidates missing from --prices")
 	minAdjROIC := flags.Float64("min-adj-roic", 15.0, "minimum Intangible-Adjusted ROIC in percent")
@@ -38,7 +38,7 @@ func RunModernGAAPArbitrage(parent context.Context, args []string, output, error
 		return err
 	}
 	if len(flags.Args()) != 0 {
-		return errors.New("gaap-arbitrage accepts tickers through --universe FILE")
+		return errors.New("intangible screen accepts tickers through --universe FILE")
 	}
 	for name, value := range map[string]float64{
 		"--min-adj-roic":  *minAdjROIC,

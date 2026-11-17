@@ -13,31 +13,22 @@ import (
 
 const usage = `usage: sec <command> [arguments] [options]
 
-Commands:
-  sync TICKER...              Download or refresh facts and filings
-  sync --universe FILE        Sync newline-separated tickers from a file
-  precompute [TICKER...]      Precompute and cache rank & GAAP arbitrage variables
-  summary TICKER [--years N]  Show annual financial metrics (3-5 years)
-  dcf TICKER [options]        Estimate intrinsic value from SEC facts
-  arbitrage [options]         Rank quality compounders against implied growth
-  gaap-arbitrage [options]    Screen modern GAAP arbitrage (intangible-capitalized value)
-  audit [--gaps-only]         Scan the database and report missing facts
-  audit TICKER                Deep-dive diagnostic on a company to discover raw tags
-  read TICKER                 Browse and read saved filings
-  list                        List companies in the shared database
-  universe [list]             List available universes and sync coverage
-  export TICKER --format FMT  Export saved facts as csv or json
-  rank [--universe FILE]      Screen and rank the saved universe
-  discount [options]          Screen quality compounders trading at a discount (DCF margin of safety)
-  serve [--port PORT]         Start web server and interactive frontend
+Data
+  sync TICKER...              Fetch company facts and filings
+  universe list|status        Browse universes and sync coverage
 
-Options:
-  --data-dir DIR  directory containing sec.db (default SEC_DATABASE_DIR or data)
+Research
+  summary TICKER              Show financial metrics
+  dcf TICKER                  Estimate intrinsic value
+  screen MODEL                Rank or screen companies
+  read TICKER                 Browse saved filings
 
-Sync option:
-  --ua STRING     SEC User-Agent including contact email (default SEC_USER_AGENT)
-  --workers N     concurrent sync workers (1-4, default 4)
+Output & maintenance
+  export TICKER               Export facts as CSV or JSON
+  audit [TICKER]              Diagnose missing facts or company tags
+  cache rebuild               Recompute derived data
 
+Screen models: quality, growth, discount, intangible
 Run "sec <command> --help" for command-specific options.
 `
 
@@ -64,11 +55,16 @@ func run(parent context.Context, args []string, output, errorOutput io.Writer) e
 	case "sync":
 		return commands.RunSync(parent, args, output, errorOutput)
 	case "precompute":
+		// Retain the original command as a compatibility alias.
 		return commands.RunPrecompute(parent, args, output, errorOutput)
+	case "cache":
+		return commands.RunCache(parent, args, output, errorOutput)
 	case "summary":
 		return commands.RunSummary(parent, args, output, errorOutput)
 	case "dcf":
 		return commands.RunDCF(parent, args, output, errorOutput)
+	case "screen":
+		return commands.RunScreen(parent, args, output, errorOutput)
 	case "read":
 		return commands.RunRead(parent, args, output, errorOutput)
 	case "list":
@@ -87,8 +83,6 @@ func run(parent context.Context, args []string, output, errorOutput io.Writer) e
 		return commands.RunModernGAAPArbitrage(parent, args, output, errorOutput)
 	case "audit":
 		return commands.RunAudit(parent, args, output, errorOutput)
-	case "serve":
-		return commands.RunServe(parent, args, output, errorOutput)
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", command, usage)
 	}

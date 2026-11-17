@@ -17,7 +17,7 @@ import (
 
 func RunRank(parent context.Context, args []string, output, errorOutput io.Writer) error {
 	flags := flag.NewFlagSet("rank", flag.ContinueOnError)
-	SetFlagUsage(flags, errorOutput, "usage: sec rank [--universe FILE] [--top N] [--years 5|6] [--min-revenue AMOUNT] [--currency USD|EUR|GBP] [--exclude-financials] [--data-dir DIR]")
+	SetFlagUsage(flags, errorOutput, "usage: sec screen quality [--universe FILE] [--top N] [--years 5|6] [--min-revenue AMOUNT] [--currency USD|EUR|GBP] [--exclude-financials] [--data-dir DIR]")
 	universeFile := flags.String("universe", "", "optional file restricting ranking to these tickers")
 	top := flags.Int("top", 0, "limit output to the top N companies by composite score (0 shows all)")
 	years := flags.Int("years", 6, "annual periods to use (6 periods provide five-year trends)")
@@ -32,7 +32,7 @@ func RunRank(parent context.Context, args []string, output, errorOutput io.Write
 		return err
 	}
 	if len(flags.Args()) != 0 {
-		return errors.New("rank accepts tickers through --universe FILE")
+		return errors.New("quality screen accepts tickers through --universe FILE")
 	}
 	if *years < 5 || *years > 6 {
 		return errors.New("--years must be 5 or 6 annual periods; use 6 for five-year trends")

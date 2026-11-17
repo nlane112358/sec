@@ -13,37 +13,26 @@ SEC EDGAR requires an identifying `User-Agent` with contact information via `SEC
 
 ## Commands
 
-### Web Terminal (`serve`)
+The CLI is organized around data collection, company research, screening, and maintenance:
 
-Start the interactive web application inspired by the minimalist, editorial craft of [paco.me](https://paco.me) (Paco Coursey):
+```text
+Data
+  sync TICKER...               Fetch company facts and filings
+  universe list|status          Browse universes and sync coverage
 
-```sh
-./sec serve
-./sec serve --port 8080
+Research
+  summary TICKER                Show financial metrics
+  dcf TICKER                    Estimate intrinsic value
+  screen MODEL                  Rank or screen companies
+  read TICKER                   Browse saved filings
+
+Output & maintenance
+  export TICKER                 Export facts as CSV or JSON
+  audit [TICKER]                Diagnose missing facts or company tags
+  cache rebuild                 Recompute derived data
 ```
 
-Access the frontend at `http://localhost:8080`.
-- **Command Menu (`cmdk`)**: Press `⌘K` or `/` for instant fuzzy search across 528 companies, quick tab switching, and actions.
-- **Signature Micro-Interactions & "Paco Coursey" Craft**:
-  - **Zero-Latency Optimistic Prefetching**: 80ms hover intent listener across the Watchlist, Navbar, UniverseScreener rows, and Peer tables fires background prefetching into `summaryCache` and `quoteCache`, enabling clicking tickers to transition in 0ms with zero loading spinner.
-  - **Synchronized Crosshair Scrubbing on Sparklines & Charts**: Bidirectional crosshairs link all inline sparklines in `FinancialStatement.tsx`, statement table columns, and all visual charts in `FinancialCharts.tsx`—hovering or scrubbing FY 2023 in any chart, table column, or sparkline highlights FY 2023 across the entire page simultaneously.
-  - **One-Click "Tear Sheet" Card Export (`⌘ + Shift + S`)**: Instantly generates a clean, high-resolution (2x Retina, 2400×1500), dark-mode PNG summary card featuring Company Header, Key Valuation Multiples, Peters & Taylor Economic ROIC, DCF Football Field, and 5-Year Sparklines, copying directly to the clipboard ready to paste into X/Twitter, Substack, or Slack.
-- **5-Year Statements & Micro-Sparklines**: Clean tabular statements with inline 5-year SVG sparklines, SBC highlights, Peters & Taylor adjustments, CSV/JSON export, and 1-click Markdown Executive Investment Memo generation.
-- **Interactive Forward & Reverse DCF**: Dynamic sliders for Growth, WACC/Discount, and Terminal Growth with real-time per-share intrinsic valuation, EV-to-equity bridge, 3x3 sensitivity matrix, shareable model URLs, and a **Reverse DCF (Expectations Arbitrage)** solver finding market-implied growth and alpha spread.
-- **Intangible Capitalization & Waterfall**: Modern GAAP arbitrage breakdown (5-year linear R&D amortization, 30% SG&A brand capital over 3 years) with visual step-by-step Capitalization Waterfall bridge.
-- **Buffett Compounder Screener**: Multi-factor institutional ranking across 528 companies with 0–100 quality scores, Intangible-adjusted ROIC, FCF conversion, 5Y revenue CAGR, and share cannibalism/buyback filters.
-- **Owner Earnings Yield Ranking**: Dedicated institutional screener ranking companies by intangible-adjusted owner earnings yield (`(FCF - SBC + Net Intangibles) / Market Cap`) against the 10-year Treasury hurdle (6.84%), exposing headline FCF yield vs SBC dilution drag, market caps, and franchise compounder tiers with CSV export.
-- **Side-by-Side Peer Benchmarking**: Direct competitor matrix comparing ROIC, margins, growth, and quality scores with 1-click navigation.
-- **Watchlists & Recents**: Quick star watchlists and recent history tray in navigation for rapid switching.
-- **True "Click-to-Verify" SEC Filing Traceability**: Clicking any cell across Annual, Quarterly, or TTM Financial Statements opens a split-screen drawer displaying the exact XBRL concept provenance (`us-gaap:ResearchAndDevelopmentExpense`), SEC Form 10-K filing date, accession number, 1-click `=SEC("AAPL", "Revenue", 2025)` copy button, and the live official SEC filing HTML anchored and highlighted directly at the table line item.
-- **10-K Redline & Diff Analyzer**: Institutional comparison engine comparing Item 1A (Risk Factors) or Item 7 (MD&A) between any two 10-Ks, highlighting added paragraphs in green and deleted paragraphs in red with word-level precision, similarity scores, and 1-click executive diff report export.
-- **SEC Filings Browser**: Complete filing history with direct links to SEC EDGAR documents.
-- **Keyboard-driven navigation**: `[` / `]` to cycle companies, `1`-`6` to switch views, `t` to toggle dark/light theme, `?` for shortcuts.
-
-For local frontend development with instant Hot Module Replacement:
-```sh
-cd web && npm run dev
-```
+Screen models are `quality`, `growth`, `discount`, and `intangible`. Use `sec screen MODEL --help` for model-specific options. The older commands `rank`, `arbitrage`, `gaap-arbitrage`, `precompute`, and `list` remain available as compatibility commands.
 
 ### Universe Breadth & Ingestion (`universe` & `sync`)
 
@@ -56,9 +45,10 @@ The repository includes built-in universe rosters under `universes/`:
 - `broad_market_3000.txt` / `russell3000.txt` (3,000+ tickers): Broad market investable US universe.
 - `sp500.txt` (500 tickers) & `nasdaq100.txt` (100 tickers): Large-cap US benchmarks.
 
-Inspect coverage and sync status across all universes:
+List available universes and inspect their sync coverage:
 ```sh
-./sec universe
+./sec universe list
+./sec universe status
 ```
 
 Sync any individual ticker or universe file with automatic rate-limiting compliance (8.5 req/sec SEC EDGAR threshold):
@@ -103,65 +93,6 @@ Display multi-year annual, discrete quarterly (10-Q), or Trailing-Twelve-Month (
 - **Reported & Derived Fundamentals**:
   - Revenue, operating income, SG&A, R&D, intangible amortization, intangible-adjusted operating income, net income, operating cash flow (OCF), CapEx, D&A, free cash flow (`OCF - CapEx`), stock-based compensation (SBC), an SBC-adjusted FCF proxy, cash, borrowings, stockholders' equity, intangible capital, adjusted invested capital, intangible-adjusted ROIC, and share counts.
 
-### Excel & Google Sheets Integration (`=SEC(...)`)
-
-Institutional retention requires zero-friction integration into financial modeling workflows. The built-in web server exposes clean REST endpoints and drop-in formula connectors for **Google Sheets** and **Microsoft Excel**.
-
-Start the server:
-```sh
-./sec serve --port 8080
-```
-
-#### 1. Google Sheets (`SEC.gs`)
-1. In any Google Sheet, navigate to **Extensions** ➔ **Apps Script**.
-2. Copy the contents of [`integrations/sheets/SEC.gs`](integrations/sheets/SEC.gs) (or click **Excel / Sheets** in the web UI at `http://localhost:8080` to copy).
-3. Save and return to your sheet. Full autocomplete and documentation appear automatically:
-
-```excel
-=SEC("MSFT", "ADJ_ROIC")
-=SEC("AAPL", "REVENUE", "TTM")
-=SEC("NVDA", "FCF", "2024")
-=SEC_MATRIX(A2:A20, B1:F1, "TTM")
-```
-
-#### 2. Microsoft Excel: Modern Zero-Install (`WEBSERVICE` / `LAMBDA`)
-Modern Excel (Microsoft 365, Excel 2013+) natively supports REST lookups without macros or add-ins:
-
-```excel
-=NUMBERVALUE(WEBSERVICE("http://localhost:8080/api/sec/MSFT/ADJ_ROIC?raw=1"))
-```
-
-To enable the clean `=SEC("MSFT", "ADJ_ROIC")` syntax in Excel:
-1. Open **Formulas** ➔ **Name Manager** ➔ **New**.
-2. Set **Name**: `SEC`.
-3. Set **Refers to**:
-```excel
-=LAMBDA(ticker,metric,NUMBERVALUE(WEBSERVICE("http://localhost:8080/api/sec/" & ticker & "/" & metric & "?raw=1")))
-```
-
-#### 3. Microsoft Excel: Drop-In VBA Module (`SEC.bas`)
-For offline or legacy Excel workbooks:
-1. In Excel, press `Alt+F11` (`Option+F11` on Mac) to open the VBA Editor.
-2. Select **File** ➔ **Import File...** and choose [`integrations/excel/SEC.bas`](integrations/excel/SEC.bas).
-3. Use `=SEC("AAPL", "FCF")` and `=SEC_MATRIX(A2:A10, B1:E1)` directly in any cell.
-
-#### Supported Metric Aliases
-| Metric Key | Description | Output Example |
-| :--- | :--- | :--- |
-| `ADJ_ROIC` / `ROIC` | Peters & Taylor Intangible-Adjusted ROIC | `0.232` (raw) / `23.2%` |
-| `REVENUE` / `SALES` | Total Revenue / Top-Line | `346440000000` / `$346.44B` |
-| `OPERATING_INCOME` / `EBIT` | GAAP Operating Income | `163190000000` / `$163.19B` |
-| `ADJ_EBIT` | Intangible-Adjusted Operating Income | `173660000000` / `$173.66B` |
-| `NET_INCOME` | Net Income Attributable to Shareholders | `142630000000` / `$142.63B` |
-| `OCF` | Net Cash from Operating Activities | `195880000000` / `$195.88B` |
-| `CAPEX` | Capital Expenditures | `135920000000` / `$135.92B` |
-| `FCF` / `FREE_CASH_FLOW` | Free Cash Flow (`OCF - CapEx`) | `59960000000` / `$59.96B` |
-| `SBC` | Stock-Based Compensation Expense | `1256000000` / `$12.56B` |
-| `OWNER_EARNINGS` / `SBC_FCF`| SBC-Adjusted FCF Proxy (`FCF - SBC`) | `47400000000` / `$47.40B` |
-| `CASH` / `DEBT` | Cash & Equivalents / Total Borrowings | Balance sheet items |
-| `ADJ_INVESTED_CAPITAL` | Intangible-Adjusted Invested Capital | Balance sheet items |
-| `SHARES` | Period-End Shares Outstanding | `7430000000` / `7.43B shares` |
-
 ### Discounted Cash Flow (`dcf`)
 
 Run a two-stage DCF model with projected cash flows, an EV-to-equity bridge, per-share value, and a discount/terminal-growth sensitivity matrix:
@@ -199,9 +130,9 @@ The inverse uses the same WACC inputs, effective tax-rate estimate, debt-cost es
 Screen the rank universe for high-quality nonfinancial companies, then rank candidates by historical growth less market-implied growth:
 
 ```sh
-./sec arbitrage --prices quotes.csv --min-score 75 --min-roic 15
-./sec arbitrage --fetch-prices --min-score 75 --min-roic 15 --require-buybacks
-./sec arbitrage --prices valuations.json --universe sp500.txt
+./sec screen growth --prices quotes.csv --min-score 75 --min-roic 15
+./sec screen growth --fetch-prices --min-score 75 --min-roic 15 --require-buybacks
+./sec screen growth --prices valuations.json --universe sp500.txt
 ```
 
 `--prices` accepts CSV/TSV with `TICKER,PRICE` or `TICKER,MARKET_CAP` headers, or JSON ticker/value records. A legacy `TICKER,VALUE` column treats values below $1 million as share prices and larger values as market caps. `--fetch-prices` requests Yahoo Finance v8 chart prices, with Stooq quotes for symbols Yahoo does not return. Share prices are multiplied by SEC period-end shares outstanding, then diluted weighted-average shares, with a direct SEC facts lookup if summary share counts are unavailable. The table includes separate historical-company and SIC-peer-median alpha spreads; the ranked historical growth falls back to revenue CAGR when cash-flow history is unavailable.
@@ -210,7 +141,7 @@ Screen the rank universe for high-quality nonfinancial companies, then rank cand
 
 Standard GAAP accounting—and therefore retail screeners—treats physical CapEx as an asset, but treats foundational R&D (`ResearchAndDevelopmentExpense`) and brand/customer acquisition (`SellingGeneralAndAdministrativeExpense`) as immediate 100% operating expenses. This artificially depresses Operating Income, Book Equity, and Invested Capital for software, biotech, and high-moat consumer firms.
 
-The **Peters & Taylor Total Q / Damodaran Intangible Capitalization model** is implemented directly in `summary` and `gaap-arbitrage`:
+The **Peters & Taylor Total Q / Damodaran Intangible Capitalization model** is implemented directly in `summary` and the `intangible` screen:
 
 - **Capitalize R&D & 30% of SG&A**:
   - R&D is capitalized and amortized linearly over 5 years (20% per year).
@@ -248,9 +179,9 @@ Inspect any company's intangible adjustments across 3 to 5 years:
 Screen for companies that look unprofitable or "expensive" on standard GAAP metrics (and are ignored by traditional value funds), but exhibit surging Intangible-Adjusted ROIC and high Intangible-Adjusted Owner Earnings Yield:
 
 ```sh
-./sec gaap-arbitrage --fetch-prices --min-adj-roic 15 --min-yield 3.5
-./sec gaap-arbitrage --prices quotes.csv --surging --screen-expensive
-./sec gaap-arbitrage --min-yield 0 --sort roic --universe sp500.txt
+./sec screen intangible --fetch-prices --min-adj-roic 15 --min-yield 3.5
+./sec screen intangible --prices quotes.csv --surging --screen-expensive
+./sec screen intangible --min-yield 0 --sort roic --universe sp500.txt
 ```
 
 - **Screener Options**:
@@ -270,10 +201,10 @@ The screener filters for high-moat compounders (5Y multi-year ROIC ≥ 12%, comp
 
 ```sh
 # Run QaaD screener across small-caps or broad market
-./sec discount --prices data/prices.csv --universe russell2000.txt --min-score 70 --min-discount 15
-./sec discount --fetch-prices --universe sp500.txt --min-score 75 --min-discount 20
-./sec discount --prices data/prices.csv --sort discount --top 10
-./sec discount --prices data/prices.csv --min-fcf-yield 6.0 --require-buybacks
+./sec screen discount --prices data/prices.csv --universe russell2000.txt --min-score 70 --min-discount 15
+./sec screen discount --fetch-prices --universe sp500.txt --min-score 75 --min-discount 20
+./sec screen discount --prices data/prices.csv --sort discount --top 10
+./sec screen discount --prices data/prices.csv --min-fcf-yield 6.0 --require-buybacks
 ```
 
 - **Composite QAAD Score (0–100)**:
@@ -293,10 +224,10 @@ The screener filters for high-moat compounders (5Y multi-year ROIC ≥ 12%, comp
 Screen and rank synced companies by within-industry percentiles:
 
 ```sh
-./sec rank
-./sec rank --universe sp500.txt --years 6 --min-revenue 100000000
-./sec rank --currency EUR --min-revenue 100000000
-./sec rank --exclude-financials
+./sec screen quality
+./sec screen quality --universe sp500.txt --years 6 --min-revenue 100000000
+./sec screen quality --currency EUR --min-revenue 100000000
+./sec screen quality --exclude-financials
 ```
 
 - **Eligibility**: Requires a recent filing, 6 annual periods for 5-year trends (`--years 5` for 4-year trends), latest revenue ≥ `--min-revenue` (converted to USD via live/cached FX rates; or specify `--currency EUR|GBP`), and positive net income over the last 3 years. Nonfinancials also require positive latest OCF and pass a solvency check when cash and debt facts are present. Supports European Form 20-F filers reporting in EUR, GBP, CHF, DKK, etc.
@@ -324,7 +255,7 @@ Scan the SQLite database to diagnose XBRL taxonomy coverage, detect reporting ga
 
 ```sh
 ./sec read AAPL                            # Browse filings and open SEC URLs (n/p move, /text search, q quit)
-./sec list                                 # List synced tickers, company names, and CIKs
+./sec list                                 # Compatibility command: list synced tickers, names, and CIKs
 ./sec export AAPL --format csv > aapl.csv  # Export extracted facts as CSV or JSON
 ```
 
@@ -343,12 +274,12 @@ Most financial websites and retail screeners fail Buffett's tests because they r
 
 | Buffett Tenet | Why It Matters to Buffett | How `sec` Implements It | Primary Command |
 | :--- | :--- | :--- | :--- |
-| **Economic Moats (ROIC & ROE)** | A moat allows a firm to earn excess returns on capital for decades without competitors eroding margins. | Evaluates 5-year average **ROIC** (20% weight) and operating margin consistency (15% weight). For financial firms (banks and insurers like GEICO), weights **ROE** at 30%. | `./sec rank` |
+| **Economic Moats (ROIC & ROE)** | A moat allows a firm to earn excess returns on capital for decades without competitors eroding margins. | Evaluates 5-year average **ROIC** (20% weight) and operating margin consistency (15% weight). For financial firms (banks and insurers like GEICO), weights **ROE** at 30%. | `./sec screen quality` |
 | **True "Owner Earnings"** | Net income and EBITDA are distorted by accounting rules. Buffett defined owner earnings in 1986 as cash from operations minus maintenance CapEx. | Calculates genuine owner earnings by deducting CapEx and **Stock-Based Compensation (`FCF - SBC`)**, recognizing options dilution as a real expense. | `./sec summary`<br>`./sec dcf --reverse --mode owner` |
-| **Capital Allocation ("The Cannibals")** | When a stock is undervalued, aggressive share repurchases multiply intrinsic value per share (e.g., Henry Singleton, Apple). | Tracks 5-year split-adjusted share reduction (10% rank weight) and filters for non-dilutive businesses. | `./sec rank`<br>`./sec arbitrage --require-buybacks` |
-| **Fortress Balance Sheets** | *"We never want to be dependent on the kindness of strangers."* Low leverage survives panics. | Incorporates Net Cash / Assets, gross debt overrides, and solvency checks before ranking. | `./sec summary`<br>`./sec rank` |
-| **"Invert, Always Invert" (Expectations Arbitrage)** | Buffett avoids spreadsheets with speculative 10-year forecasts. Instead, he inverts: *What does today's price assume the company must achieve?* | Solves the **Reverse DCF** to find the market-implied growth rate, comparing it to historical cash generation to isolate a **Margin of Safety**. | `./sec arbitrage`<br>`./sec dcf --reverse` |
-| **Modern Economic Goodwill** | See's Candies and Apple proved that brand loyalty and software R&D create massive economic goodwill that GAAP immediately expenses. | Peters & Taylor / Damodaran model capitalizes R&D and brand SG&A, revealing hidden Intangible-Adjusted ROIC. | `./sec gaap-arbitrage` |
+| **Capital Allocation ("The Cannibals")** | When a stock is undervalued, aggressive share repurchases multiply intrinsic value per share (e.g., Henry Singleton, Apple). | Tracks 5-year split-adjusted share reduction (10% rank weight) and filters for non-dilutive businesses. | `./sec screen quality`<br>`./sec screen growth --require-buybacks` |
+| **Fortress Balance Sheets** | *"We never want to be dependent on the kindness of strangers."* Low leverage survives panics. | Incorporates Net Cash / Assets, gross debt overrides, and solvency checks before ranking. | `./sec summary`<br>`./sec screen quality` |
+| **"Invert, Always Invert" (Expectations Arbitrage)** | Buffett avoids spreadsheets with speculative 10-year forecasts. Instead, he inverts: *What does today's price assume the company must achieve?* | Solves the **Reverse DCF** to find the market-implied growth rate, comparing it to historical cash generation to isolate a **Margin of Safety**. | `./sec screen growth`<br>`./sec dcf --reverse` |
+| **Modern Economic Goodwill** | See's Candies and Apple proved that brand loyalty and software R&D create massive economic goodwill that GAAP immediately expenses. | Peters & Taylor / Damodaran model capitalizes R&D and brand SG&A, revealing hidden Intangible-Adjusted ROIC. | `./sec screen intangible` |
 | **Primary-Source Due Diligence** | *"I read 500 pages like this every day."* Buffett reads 10-Ks directly, never relying on analyst opinions or secondary aggregators. | Local interactive 10-K and 10-Q browser directly connected to SEC EDGAR accession documents. | `./sec read`<br>`./sec audit` |
 
 ---
@@ -368,7 +299,7 @@ export SEC_USER_AGENT="BuffettResearch contact@berkshirehathaway.com"
 Run the fundamental ranker over 5-year trends to isolate companies with high ROIC, stable operating margins, high owner-earnings conversion, and shrinking share counts:
 ```sh
 # Rank nonfinancial firms with at least $100M revenue over 5-year multi-year trends
-./sec rank --universe sp500.txt --years 6 --min-revenue 100000000 --exclude-financials
+./sec screen quality --universe sp500.txt --years 6 --min-revenue 100000000 --exclude-financials
 ```
 *What Buffett looks for in the output:*
 - **Composite Score $\ge 70–75$**: Top quartile of industry peers across profitability, solvency, and growth.
@@ -379,7 +310,7 @@ Run the fundamental ranker over 5-year trends to isolate companies with high ROI
 #### Step 3: Run Expectations Arbitrage (Reverse DCF & Margin of Safety)
 Buffett does not construct 10-year DCF models with arbitrary growth assumptions. Instead, he inverts: *What expectations are baked into the current market price?*
 ```sh
-./sec arbitrage --fetch-prices --min-score 75 --min-roic 15 --require-buybacks
+./sec screen growth --fetch-prices --min-score 75 --min-roic 15 --require-buybacks
 ```
 *How to interpret the results like Buffett:*
 - **Implied Growth Rate**: If Mr. Market prices a high-quality compounder for only **2% to 4% implied growth**, expectations are extremely depressed.
@@ -392,7 +323,7 @@ In 1972, Berkshire acquired See's Candies for $25 million with only $8 million o
 Under standard GAAP, brand marketing (SG&A) and software engineering (R&D) are expensed immediately, making these companies look artificially expensive or asset-light on traditional screeners:
 ```sh
 # Screen for companies with high Intangible-Adjusted ROIC and high Owner Earnings Yield
-./sec gaap-arbitrage --fetch-prices --min-adj-roic 18 --min-yield 3.5 --surging
+./sec screen intangible --fetch-prices --min-adj-roic 18 --min-yield 3.5 --surging
 ```
 *Buffett's takeaway:* If a company's **Intangible-Adjusted ROIC** is 30%+ and its **Adjusted Owner Earnings Yield** is higher than the 10-year Treasury yield (`--risk-free`), you have found a modern economic franchise trading at a reasonable price.
 
@@ -441,7 +372,7 @@ Before allocating capital, run candidates through three sequential gates generat
 #### Gate 3: Valuation via Inversion (`sec arbitrage` & `sec gaap-arbitrage`)
 *Buffett: "Price is what you pay; value is what you get."*
 - **Positive Alpha Spread ($\ge 4–6\%$)**: The company's 5-year historical owner-earnings growth exceeds the growth rate implied by its current market cap ($g_{\text{hist}} - g_{\text{implied}} > 0$).
-- **Intangible Owner Yield Hurdle**: In `./sec gaap-arbitrage`, require the adjusted owner earnings yield to exceed the risk-free rate plus an equity spread:
+- **Intangible Owner Yield Hurdle**: In `./sec screen intangible`, require the adjusted owner earnings yield to exceed the risk-free rate plus an equity spread:
 
 $$
 \text{Intangible Owner Yield} \ge \text{10Y Treasury Yield (4.84\%)} + 2.0\% \approx 6.8\%–7.0\%
@@ -504,13 +435,13 @@ Buffett vigorously opposes conventional Modern Portfolio Theory (holding 50–10
 
 #### 1. Tier 1: Core Franchise Anchors (40%–60% of Portfolio)
 - **Number of Positions**: 3 to 5 companies (10% to 20% position sizes).
-- **Profile**: Businesses that score $\ge 80$ in `./sec rank`, demonstrate pricing power through inflation, have high intangible brand/R&D moats, and maintain net cash or manageable debt.
+- **Profile**: Businesses that score $\ge 80$ in `./sec screen quality`, demonstrate pricing power through inflation, have high intangible brand/R&D moats, and maintain net cash or manageable debt.
 - **Examples**: Apple, Microsoft, Moody's, Berkshire Hathaway, Visa.
 - **Holding Period**: Indefinite (decades).
 
 #### 2. Tier 2: Mispriced Value & Modern GAAP Arbitrage (20%–30% of Portfolio)
 - **Number of Positions**: 4 to 6 companies (4% to 8% position sizes).
-- **Profile**: Companies identified by `./sec arbitrage` and `./sec gaap-arbitrage` where Mr. Market is pricing in near-zero or negative growth due to cyclical headwinds or because GAAP expenses their brand/R&D investments.
+- **Profile**: Companies identified by `./sec screen growth` and `./sec screen intangible` where Mr. Market is pricing in near-zero or negative growth due to cyclical headwinds or because GAAP expenses their brand/R&D investments.
 - **Holding Period**: 3 to 7 years (until market expectations re-rate to historical compounding reality).
 
 #### 3. Tier 3: Cash & Treasury "Dry Powder" (10%–25% of Portfolio)
@@ -524,8 +455,8 @@ Buffett vigorously opposes conventional Modern Portfolio Theory (holding 50–10
 
 | Phase | Objective | CLI Commands |
 | :--- | :--- | :--- |
-| **Discovery** | Screen entire universe for elite capital allocators | `./sec rank --universe sp500.txt --exclude-financials` |
-| **Valuation** | Demand margin of safety; invert market expectations | `./sec arbitrage --fetch-prices --min-score 75 --min-roic 15`<br>`./sec gaap-arbitrage --fetch-prices --surging` |
+| **Discovery** | Screen entire universe for elite capital allocators | `./sec screen quality --universe sp500.txt --exclude-financials` |
+| **Valuation** | Demand margin of safety; invert market expectations | `./sec screen growth --fetch-prices --min-score 75 --min-roic 15`<br>`./sec screen intangible --fetch-prices --surging` |
 | **Due Diligence** | Verify disclosures and read 10-K cover to cover | `./sec summary TICKER`<br>`./sec audit TICKER`<br>`./sec read TICKER` |
 | **Sizing** | Allocate 10–20% for Core Franchises; 5–8% for Arbitrage | Tiered punch-card framework |
 | **Monitoring** | Annual 10-K checkup: confirm ROIC & owner earnings hold | `./sec summary TICKER --years 5` |

@@ -17,7 +17,7 @@ import (
 
 func RunArbitrage(parent context.Context, args []string, output, errorOutput io.Writer) error {
 	flags := flag.NewFlagSet("arbitrage", flag.ContinueOnError)
-	SetFlagUsage(flags, errorOutput, "usage: sec arbitrage [--prices FILE] [--fetch-prices] [--min-score 75] [--min-roic 12] [--require-buybacks] [--universe FILE] [--data-dir DIR]")
+	SetFlagUsage(flags, errorOutput, "usage: sec screen growth [--prices FILE] [--fetch-prices] [--min-score 75] [--min-roic 12] [--require-buybacks] [--universe FILE] [--data-dir DIR]")
 	pricesFile := flags.String("prices", "", "CSV/TSV or JSON file with ticker prices or market caps")
 	fetchPrices := flags.Bool("fetch-prices", false, "fetch live Yahoo Finance quotes (Stooq fallback) for candidates missing from --prices")
 	minScore := flags.Float64("min-score", 70, "minimum sec rank composite quality score (0-100)")
@@ -48,7 +48,7 @@ func RunArbitrage(parent context.Context, args []string, output, errorOutput io.
 		*riskFree = profile.RiskFreeRate
 	}
 	if len(flags.Args()) != 0 {
-		return errors.New("arbitrage accepts tickers through --universe FILE")
+		return errors.New("growth screen accepts tickers through --universe FILE")
 	}
 	for name, value := range map[string]float64{
 		"--min-score": *minScore, "--min-roic": *minROIC,
