@@ -31,12 +31,51 @@ func (w LockedWriter) Write(data []byte) (int, error) {
 	return w.Writer.Write(data)
 }
 
+func isTerminalWriter(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return (info.Mode() & os.ModeCharDevice) != 0
+}
+
+func isTerminalReader(r io.Reader) bool {
+	f, ok := r.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return (info.Mode() & os.ModeCharDevice) != 0
+}
+
 func SetFlagUsage(flags *flag.FlagSet, errorOutput io.Writer, usageLine string) {
 	flags.SetOutput(errorOutput)
 	flags.Usage = func() {
 		fmt.Fprintln(errorOutput, usageLine)
 		flags.PrintDefaults()
 	}
+}
+
+// openStore opens (or initializes) the shared SQLite store at dataDir/sec.db.
+func openStore(parent context.Context, dataDir string, timeout time.Duration) (context.Context, context.CancelFunc, *store.Store, string, error) {
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	databasePath := SharedDatabasePath(dataDir)
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	s, err := store.Open(ctx, databasePath)
+	if err != nil {
+		cancel()
+		return nil, nil, nil, databasePath, err
+	}
+	return ctx, cancel, s, databasePath, nil
 }
 
 func WithExistingStore(parent context.Context, path, ticker string, action func(context.Context, *store.Store) error) error {
@@ -47,9 +86,9 @@ func WithExistingStoreTimeout(parent context.Context, path, ticker string, timeo
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			if ticker == "" {
-				return errors.New("no shared SEC database yet; sync a ticker or ticker universe first")
+				return errors.New("no shared SEC database yet; run a command with a ticker or @universe to initialize it")
 			}
-			return fmt.Errorf("no saved data for %s; run sec sync %s first", ticker, ticker)
+			return fmt.Errorf("no saved data for %s; run sec inspect %s or sec data sync %s", ticker, ticker, ticker)
 		}
 		return fmt.Errorf("inspect company database: %w", err)
 	}
@@ -68,11 +107,14 @@ func SharedDatabasePath(dataDir string) string {
 }
 
 func resolveUniversePath(path string) string {
+	if resolved, _, ok := resolveUniverseSpec(path); ok {
+		return resolved
+	}
 	candidates := []string{
 		path,
 		path + ".txt",
-		filepath.Join("universes", path),
-		filepath.Join("universes", path + ".txt"),
+		filepath.Join(universesDir(), path),
+		filepath.Join(universesDir(), path+".txt"),
 	}
 	for _, c := range candidates {
 		if _, err := os.Stat(c); err == nil {
@@ -84,42 +126,30 @@ func resolveUniversePath(path string) string {
 
 func LoadTickerUniverse(args []string, path string) ([]string, error) {
 	if path != "" && len(args) != 0 {
-		return nil, errors.New("provide tickers or --universe FILE, not both")
+		return nil, errors.New("provide tickers or --universe, not both")
 	}
-	rawTickers := append([]string(nil), args...)
+	var rawTickers []string
 	if path != "" {
-		filePath := resolveUniversePath(path)
-		file, err := os.Open(filePath)
+		loaded, err := readUniverseSpecTickers(path)
 		if err != nil {
-			return nil, fmt.Errorf("open ticker universe: %w", err)
+			return nil, err
 		}
-		defer file.Close()
-		scanner := bufio.NewScanner(file)
-		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line == "" || strings.HasPrefix(line, "#") {
-				continue
-			}
-			if strings.ContainsAny(line, ",\t") {
-				fields := strings.FieldsFunc(line, func(r rune) bool { return r == ',' || r == '\t' })
-				if len(fields) == 0 {
-					continue
+		rawTickers = append(rawTickers, loaded...)
+	} else {
+		for _, arg := range args {
+			if strings.HasPrefix(strings.TrimSpace(arg), "@") {
+				loaded, err := readUniverseSpecTickers(arg)
+				if err != nil {
+					return nil, err
 				}
-				line = strings.TrimSpace(fields[0])
-				line = strings.Trim(line, "\"'")
+				rawTickers = append(rawTickers, loaded...)
+			} else {
+				rawTickers = append(rawTickers, arg)
 			}
-			if strings.EqualFold(line, "ticker") || strings.EqualFold(line, "symbol") {
-				continue
-			}
-			rawTickers = append(rawTickers, strings.Fields(line)...)
-		}
-		if err := scanner.Err(); err != nil {
-			return nil, fmt.Errorf("read ticker universe: %w", err)
 		}
 	}
 	if len(rawTickers) == 0 {
-		return nil, errors.New("provide at least one ticker or a non-empty --universe FILE")
+		return nil, errors.New("provide at least one ticker or non-empty @universe")
 	}
 	seen := make(map[string]struct{}, len(rawTickers))
 	tickers := make([]string, 0, len(rawTickers))
@@ -137,6 +167,44 @@ func LoadTickerUniverse(args []string, path string) ([]string, error) {
 	return tickers, nil
 }
 
+func readUniverseSpecTickers(spec string) ([]string, error) {
+	filePath := resolveUniversePath(spec)
+	file, err := os.Open(filePath)
+	if err != nil {
+		if strings.HasPrefix(strings.TrimSpace(spec), "@") {
+			return nil, fmt.Errorf("unknown universe %q (run \"sec universe list\" to see available @aliases)", spec)
+		}
+		return nil, fmt.Errorf("open ticker universe %q: %w", spec, err)
+	}
+	defer file.Close()
+
+	var rawTickers []string
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.ContainsAny(line, ",\t") {
+			fields := strings.FieldsFunc(line, func(r rune) bool { return r == ',' || r == '\t' })
+			if len(fields) == 0 {
+				continue
+			}
+			line = strings.TrimSpace(fields[0])
+			line = strings.Trim(line, "\"'")
+		}
+		if strings.EqualFold(line, "ticker") || strings.EqualFold(line, "symbol") {
+			continue
+		}
+		rawTickers = append(rawTickers, strings.Fields(line)...)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read ticker universe: %w", err)
+	}
+	return rawTickers, nil
+}
+
 func CommandTicker(args []string) (string, error) {
 	if len(args) != 1 {
 		return "", errors.New("provide exactly one ticker symbol, for example AAPL")
@@ -148,13 +216,23 @@ func CommandTicker(args []string) (string, error) {
 	return ticker, nil
 }
 
-// ParseCommandFlags accepts the documented `command TICKER --option value`
-// order while retaining the standard library flag parser and its validation.
+// ParseCommandFlags accepts options anywhere relative to positional arguments
+// while retaining the standard library flag parser and its validation.
 func ParseCommandFlags(flags *flag.FlagSet, args []string, valueFlags ...string) error {
 	valueFlagSet := make(map[string]bool, len(valueFlags))
 	for _, name := range valueFlags {
 		valueFlagSet[name] = true
 	}
+	flags.VisitAll(func(f *flag.Flag) {
+		type boolFlagger interface {
+			IsBoolFlag() bool
+		}
+		if bf, ok := f.Value.(boolFlagger); ok && bf.IsBoolFlag() {
+			return
+		}
+		valueFlagSet[f.Name] = true
+	})
+
 	var options, positionals []string
 	for i := 0; i < len(args); i++ {
 		arg := args[i]

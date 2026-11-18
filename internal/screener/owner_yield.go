@@ -2,9 +2,12 @@ package screener
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"math"
 	"sort"
 	"strings"
+	"text/tabwriter"
 
 	"sec/internal/store"
 )
@@ -318,4 +321,40 @@ func ScreenOwnerYield(
 	}
 
 	return result, nil
+}
+
+// WriteOwnerYieldTable prints owner-yield screening candidates in a formatted table.
+func WriteOwnerYieldTable(output io.Writer, result OwnerYieldResult) error {
+	writer := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
+	if _, err := fmt.Fprintln(writer, "RANK\tTICKER\tCOMPANY\tPRICE\tMARKET CAP\tOWNER YLD\tSTD OWNER YLD\tFCF YLD\tSBC/FCF\tADJ ROIC\tTIER\tHURDLE"); err != nil {
+		return err
+	}
+	for _, c := range result.Candidates {
+		companyName := c.Company
+		if len(companyName) > 24 {
+			companyName = strings.TrimSpace(companyName[:23]) + "…"
+		}
+		peOrPrice := fmt.Sprintf("$%.2f", c.Price)
+		mcapCell := formatSummaryValue(c.MarketCap, c.Currency)
+		sbcPct := "0.0%"
+		if c.SBCPercentOfFCF > 0 {
+			sbcPct = fmt.Sprintf("%.1f%%", c.SBCPercentOfFCF)
+		}
+		adjROIC := formatPercent(c.AdjustedROIC, c.HasAdjustedROIC)
+		hurdle := "no"
+		if c.BeatsHurdle {
+			hurdle = "PASS"
+		}
+		if _, err := fmt.Fprintf(writer, "%d\t%s\t%s\t%s\t%s\t%.2f%%\t%.2f%%\t%.2f%%\t%s\t%s\t%s\t%s\n",
+			c.Rank, c.Ticker, companyName, peOrPrice, mcapCell,
+			c.OwnerYield*100, c.StandardOwnerYield*100, c.FCFYield*100,
+			sbcPct, adjROIC, c.YieldTier, hurdle); err != nil {
+			return err
+		}
+	}
+	if err := writer.Flush(); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(output, "\nOwner Yield = (FCF − SBC + Net Intangible Investment) / Market Cap · Hurdle Rate: %.2f%% (10Y Treasury + 2.0%%)\n", result.HurdleRate*100)
+	return err
 }

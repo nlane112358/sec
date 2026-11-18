@@ -13,24 +13,54 @@ import (
 
 const usage = `usage: sec <command> [arguments] [options]
 
-Data
-  sync TICKER...              Fetch company facts and filings
-  universe list|status        Browse universes and sync coverage
+Company Research
+  inspect TICKER [view]       Inspect financials, quarterly/TTM, filing diffs, audits, or filings
+  value TICKER [model]        Run DCF, reverse-DCF, or WACC valuation
 
-Research
-  summary TICKER              Show financial metrics
-  dcf TICKER                  Estimate intrinsic value
-  screen MODEL                Rank or screen companies
-  read TICKER                 Browse saved filings
+Idea Discovery
+  screen [strategy] [@univ]   Screen with rank, quality-discount, owner-yield, arbitrage,
+                              gaap-arbitrage, or custom --where "<formula>" queries
 
-Output & maintenance
-  export TICKER               Export facts as CSV or JSON
-  audit [TICKER]              Diagnose missing facts or company tags
-  cache rebuild               Recompute derived data
+Universes & Data
+  universe <list|show|create> Browse, inspect, or create @-prefixed ticker universes
+  data <sync|status|prune>    Manage local SEC cache, exports, and storage
 
-Screen models: quality, growth, discount, intangible
+Server & Shell
+  serve                       Start the HTTP JSON API server
+  completion <bash|zsh|fish>  Generate shell tab-completion scripts
+
+Examples:
+  sec inspect ASML
+  sec inspect AAPL quarterly
+  sec inspect AAPL diff --item 1A
+  sec value AAPL reverse-dcf
+  sec screen @sp500 --where "roic > 0.15 && fcf_yield > 0.05"
+  sec screen owner-yield @euro-uk --min-yield 4
+
 Run "sec <command> --help" for command-specific options.
 `
+
+var movedCommandHints = map[string]string{
+	"summary":          "sec inspect <TICKER>",
+	"read":             "sec inspect <TICKER> filings",
+	"audit":            "sec inspect <TICKER> audit  (or: sec inspect audit)",
+	"dcf":              "sec value <TICKER> [dcf|reverse-dcf|wacc]",
+	"rank":             "sec screen rank [@universe]",
+	"arbitrage":        "sec screen arbitrage [@universe]",
+	"discount":         "sec screen quality-discount [@universe]",
+	"quality-discount": "sec screen quality-discount [@universe]",
+	"qaad":             "sec screen quality-discount [@universe]",
+	"qarp":             "sec screen quality-discount [@universe]",
+	"gaap-arbitrage":   "sec screen gaap-arbitrage [@universe]",
+	"modern-value":     "sec screen gaap-arbitrage [@universe]",
+	"modern":           "sec screen gaap-arbitrage [@universe]",
+	"intangible":       "sec screen gaap-arbitrage [@universe]",
+	"sync":             "sec data sync <TICKER...|@universe>  (note: inspect/value/screen now hydrate automatically)",
+	"precompute":       "sec data rebuild",
+	"cache":            "sec data rebuild",
+	"list":             "sec data status --list",
+	"export":           "sec data export <TICKER>",
+}
 
 func main() {
 	if err := execute(); err != nil {
@@ -50,40 +80,28 @@ func run(parent context.Context, args []string, output, errorOutput io.Writer) e
 		_, err := io.WriteString(output, usage)
 		return err
 	}
-	command, args := args[0], args[1:]
+	command, rest := args[0], args[1:]
 	switch command {
-	case "sync":
-		return commands.RunSync(parent, args, output, errorOutput)
-	case "precompute":
-		// Retain the original command as a compatibility alias.
-		return commands.RunPrecompute(parent, args, output, errorOutput)
-	case "cache":
-		return commands.RunCache(parent, args, output, errorOutput)
-	case "summary":
-		return commands.RunSummary(parent, args, output, errorOutput)
-	case "dcf":
-		return commands.RunDCF(parent, args, output, errorOutput)
+	case "inspect":
+		return commands.RunInspect(parent, rest, output, errorOutput)
+	case "value":
+		return commands.RunValue(parent, rest, output, errorOutput)
 	case "screen":
-		return commands.RunScreen(parent, args, output, errorOutput)
-	case "read":
-		return commands.RunRead(parent, args, output, errorOutput)
-	case "list":
-		return commands.RunList(parent, args, output, errorOutput)
+		return commands.RunScreen(parent, rest, output, errorOutput)
 	case "universe", "universes":
-		return commands.RunUniverse(parent, args, output, errorOutput)
-	case "export":
-		return commands.RunExport(parent, args, output, errorOutput)
-	case "rank":
-		return commands.RunRank(parent, args, output, errorOutput)
-	case "arbitrage":
-		return commands.RunArbitrage(parent, args, output, errorOutput)
-	case "discount", "quality-discount", "qaad", "qarp":
-		return commands.RunQualityDiscount(parent, args, output, errorOutput)
-	case "gaap-arbitrage", "modern-value", "modern", "intangible":
-		return commands.RunModernGAAPArbitrage(parent, args, output, errorOutput)
-	case "audit":
-		return commands.RunAudit(parent, args, output, errorOutput)
+		return commands.RunUniverse(parent, rest, output, errorOutput)
+	case "data":
+		return commands.RunData(parent, rest, output, errorOutput)
+	case "serve":
+		return commands.RunServe(parent, rest, output, errorOutput)
+	case "completion":
+		return commands.RunCompletion(parent, rest, output, errorOutput)
+	case "__complete":
+		return commands.RunHiddenComplete(parent, rest, output, errorOutput)
 	default:
+		if hint, ok := movedCommandHints[command]; ok {
+			return fmt.Errorf("command %q was replaced by the unified grammar; use %q (run \"sec --help\" for details)", command, hint)
+		}
 		return fmt.Errorf("unknown command %q\n\n%s", command, usage)
 	}
 }

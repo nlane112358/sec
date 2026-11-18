@@ -9,7 +9,7 @@ help:
 	  'Targets:' \
 	  '  make build                 Build the sec CLI in the repository root' \
 	  '  make install               Install the sec CLI with go install' \
-	  '  make run ARGS="summary AAPL" Run a CLI command' \
+	  '  make run ARGS="inspect AAPL" Run a CLI command' \
 	  '  make clean                 Remove the built CLI' \
 	  '  make help                  Show this help'
 

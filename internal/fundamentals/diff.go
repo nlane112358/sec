@@ -1,10 +1,14 @@
 package fundamentals
 
 import (
+	"fmt"
 	"html"
+	"io"
 	"math"
 	"regexp"
 	"strings"
+
+	"sec/internal/store"
 )
 
 type DiffWord struct {
@@ -424,4 +428,166 @@ func computeWordDiff(prior, current string) []DiffWord {
 	}
 
 	return words
+}
+
+// SelectDiffFilings chooses the current and prior annual filings (10-K/20-F/40-F) to diff.
+// currentRef and priorRef may be accession numbers or 4-digit years (e.g. "2025").
+func SelectDiffFilings(filings []store.Filing, currentRef, priorRef string) (store.Filing, store.Filing, []FilingVersion, error) {
+	var annuals []store.Filing
+	for _, f := range filings {
+		form := strings.ToUpper(strings.TrimSuffix(strings.TrimSpace(f.Form), "/A"))
+		if form == "10-K" || form == "20-F" || form == "40-F" {
+			annuals = append(annuals, f)
+		}
+	}
+	if len(annuals) < 2 {
+		return store.Filing{}, store.Filing{}, nil, fmt.Errorf("at least two annual filings (10-K/20-F/40-F) are required to compute a diff (found %d)", len(annuals))
+	}
+
+	matchFiling := func(ref string) (store.Filing, bool) {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			return store.Filing{}, false
+		}
+		for _, f := range annuals {
+			if strings.EqualFold(f.Accession, ref) {
+				return f, true
+			}
+		}
+		for _, f := range annuals {
+			if strings.HasPrefix(f.FilingDate, ref) || strings.HasPrefix(f.ReportDate, ref) {
+				return f, true
+			}
+		}
+		return store.Filing{}, false
+	}
+
+	var currentFiling, priorFiling store.Filing
+	if currentRef != "" {
+		f, ok := matchFiling(currentRef)
+		if !ok {
+			return store.Filing{}, store.Filing{}, nil, fmt.Errorf("annual filing matching %q not found", currentRef)
+		}
+		currentFiling = f
+	} else {
+		currentFiling = annuals[0]
+	}
+
+	if priorRef != "" {
+		f, ok := matchFiling(priorRef)
+		if !ok {
+			return store.Filing{}, store.Filing{}, nil, fmt.Errorf("prior annual filing matching %q not found", priorRef)
+		}
+		priorFiling = f
+	} else {
+		for idx, f := range annuals {
+			if f.Accession == currentFiling.Accession && idx+1 < len(annuals) {
+				priorFiling = annuals[idx+1]
+				break
+			}
+		}
+		if priorFiling.Accession == "" {
+			priorFiling = annuals[1]
+		}
+	}
+
+	available := make([]FilingVersion, len(annuals))
+	for i, f := range annuals {
+		year := ""
+		if len(f.FilingDate) >= 4 {
+			year = f.FilingDate[:4]
+		}
+		available[i] = FilingVersion{
+			Accession:       f.Accession,
+			FilingDate:      f.FilingDate,
+			ReportDate:      f.ReportDate,
+			Form:            f.Form,
+			PrimaryDocument: f.PrimaryDocument,
+			Year:            year,
+		}
+	}
+	return currentFiling, priorFiling, available, nil
+}
+
+// WriteFilingDiff renders a FilingDiffResult for terminal inspection.
+func WriteFilingDiff(output io.Writer, res FilingDiffResult, showAll, color bool) error {
+	if _, err := fmt.Fprintf(output, "%s — %s Diff\n", res.Ticker, res.ItemTitle); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(output, "Current: %s (%s, acc %s)\n", res.CurrentFiling.Form, res.CurrentFiling.FilingDate, res.CurrentFiling.Accession); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(output, "Prior:   %s (%s, acc %s)\n", res.PriorFiling.Form, res.PriorFiling.FilingDate, res.PriorFiling.Accession); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(output, "Stats:   Similarity %.1f%% · +%d added · -%d deleted · ~%d modified · %d unchanged\n\n",
+		res.Stats.SimilarityPct, res.Stats.AddedParagraphs, res.Stats.DeletedParagraphs, res.Stats.ModifiedParagraphs, res.Stats.UnchangedParagraphs); err != nil {
+		return err
+	}
+
+	if res.Stats.TotalCurrent == 0 && res.Stats.TotalPrior == 0 {
+		_, err := fmt.Fprintf(output, "Could not extract Item %s paragraphs from the selected filings.\n", res.Item)
+		return err
+	}
+
+	changes := res.Stats.AddedParagraphs + res.Stats.DeletedParagraphs + res.Stats.ModifiedParagraphs
+	if changes == 0 && !showAll {
+		_, err := fmt.Fprintln(output, "No material text changes detected in this section.")
+		return err
+	}
+
+	green, red, yellow, dim, reset := "", "", "", "", ""
+	if color {
+		green = "\033[32m"
+		red = "\033[31m"
+		yellow = "\033[33m"
+		dim = "\033[2m"
+		reset = "\033[0m"
+	}
+
+	for _, item := range res.DiffItems {
+		switch item.Type {
+		case "added":
+			if _, err := fmt.Fprintf(output, "%s+ %s%s\n\n", green, item.Text, reset); err != nil {
+				return err
+			}
+		case "deleted":
+			if _, err := fmt.Fprintf(output, "%s- %s%s\n\n", red, item.Text, reset); err != nil {
+				return err
+			}
+		case "modified":
+			var b strings.Builder
+			b.WriteString(yellow + "~ " + reset)
+			if len(item.Words) > 0 {
+				for idx, w := range item.Words {
+					if idx > 0 {
+						b.WriteByte(' ')
+					}
+					switch w.Type {
+					case "insert":
+						b.WriteString(green + "{+" + w.Text + "+}" + reset)
+					case "delete":
+						b.WriteString(red + "[-" + w.Text + "-]" + reset)
+					default:
+						b.WriteString(w.Text)
+					}
+				}
+			} else {
+				b.WriteString(item.Text)
+			}
+			if _, err := fmt.Fprintln(output, b.String()); err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintln(output); err != nil {
+				return err
+			}
+		case "equal":
+			if showAll {
+				if _, err := fmt.Fprintf(output, "%s  %s%s\n\n", dim, item.Text, reset); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }

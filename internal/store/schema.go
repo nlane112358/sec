@@ -151,6 +151,21 @@ CREATE TABLE IF NOT EXISTS sec_gaap_arbitrage_variables (
     PRIMARY KEY (cik, years)
 );
 CREATE INDEX IF NOT EXISTS sec_gaap_arbitrage_variables_years_eligible ON sec_gaap_arbitrage_variables (years, eligible, cik);
+CREATE TABLE IF NOT EXISTS sec_quotes (
+    ticker      text PRIMARY KEY COLLATE NOCASE,
+    price       real NOT NULL DEFAULT 0,
+    high_52     real NOT NULL DEFAULT 0,
+    low_52      real NOT NULL DEFAULT 0,
+    currency    text NOT NULL DEFAULT 'USD',
+    source      text NOT NULL DEFAULT '',
+    fetched_at  text NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS sec_fx_rates (
+    currency    text PRIMARY KEY COLLATE NOCASE,
+    rate_to_usd real NOT NULL,
+    source      text NOT NULL DEFAULT '',
+    fetched_at  text NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 `
 
 var precomputeTriggers = []string{

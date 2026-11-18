@@ -1,7 +1,9 @@
 package screener
 
 import (
+	"bytes"
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -92,5 +94,13 @@ func TestScreenOwnerYield(t *testing.T) {
 		if !cand.BeatsHurdle {
 			t.Errorf("expected candidate %s to beat hurdle", cand.Ticker)
 		}
+	}
+
+	var out bytes.Buffer
+	if err := WriteOwnerYieldTable(&out, result); err != nil {
+		t.Fatalf("WriteOwnerYieldTable failed: %v", err)
+	}
+	if !strings.Contains(out.String(), "YIELD_A") || !strings.Contains(out.String(), "OWNER YLD") {
+		t.Fatalf("unexpected owner yield table:\n%s", out.String())
 	}
 }

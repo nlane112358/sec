@@ -392,7 +392,8 @@ func (s *Server) resolveMetricValue(ctx context.Context, ticker, metricName, per
 		if price <= 0 {
 			return 0, "", "", fmt.Errorf("quote unavailable for %s", ticker)
 		}
-		mcap := price * shares
+		adrShares := market.OrdinaryToADRShares(ticker, shares)
+		mcap := price * adrShares
 		return mcap, "USD", formatMetricCurrency(mcap, "USD"), nil
 	case "PE", "PE_RATIO", "P_E":
 		price := s.getQuote(ctx, ticker)
@@ -404,11 +405,19 @@ func (s *Server) resolveMetricValue(ctx context.Context, ticker, metricName, per
 			return 0, "", "", err
 		}
 		netIncome := getMetricFloat(ttm.Metrics, "Net Income", 0)
+		cur := metricUnit(ttm.Metrics, "Net Income", 0)
+		if cur != "" && !strings.EqualFold(cur, "USD") {
+			if _, fxErr := market.FetchLiveFXRate(ctx, cur); fxErr == nil {
+				// Live FX updated in cache.
+			}
+			netIncome = market.ToUSD(netIncome, cur)
+		}
 		shares, ok := s.store.LatestShareCount(ctx, ticker)
 		if !ok || shares <= 0 || netIncome <= 0 {
 			return 0, "", "", fmt.Errorf("net income or shares non-positive for PE")
 		}
-		pe := (price * shares) / netIncome
+		adrShares := market.OrdinaryToADRShares(ticker, shares)
+		pe := (price * adrShares) / netIncome
 		return pe, "x", fmt.Sprintf("%.1fx", pe), nil
 	case "FCF_YIELD":
 		price := s.getQuote(ctx, ticker)
@@ -421,7 +430,13 @@ func (s *Server) resolveMetricValue(ctx context.Context, ticker, metricName, per
 			return 0, "", "", err
 		}
 		fcf := getMetricFloat(ttm.Metrics, "Free Cash Flow", 0)
-		yield := fcf / (price * shares)
+		cur := metricUnit(ttm.Metrics, "Free Cash Flow", 0)
+		if cur != "" && !strings.EqualFold(cur, "USD") {
+			_, _ = market.FetchLiveFXRate(ctx, cur)
+			fcf = market.ToUSD(fcf, cur)
+		}
+		adrShares := market.OrdinaryToADRShares(ticker, shares)
+		yield := fcf / (price * adrShares)
 		return yield, "%", fmt.Sprintf("%.2f%%", yield*100), nil
 	case "EV", "ENTERPRISE_VALUE":
 		price := s.getQuote(ctx, ticker)
@@ -435,7 +450,17 @@ func (s *Server) resolveMetricValue(ctx context.Context, ticker, metricName, per
 		}
 		debt := getMetricFloat(ttm.Metrics, "Debt / Borrowings", 0)
 		cash := getMetricFloat(ttm.Metrics, "Cash & Equivalents", 0)
-		ev := (price * shares) + debt - cash
+		cur := metricUnit(ttm.Metrics, "Cash & Equivalents", 0)
+		if cur == "" {
+			cur = metricUnit(ttm.Metrics, "Debt / Borrowings", 0)
+		}
+		if cur != "" && !strings.EqualFold(cur, "USD") {
+			_, _ = market.FetchLiveFXRate(ctx, cur)
+			debt = market.ToUSD(debt, cur)
+			cash = market.ToUSD(cash, cur)
+		}
+		adrShares := market.OrdinaryToADRShares(ticker, shares)
+		ev := (price * adrShares) + debt - cash
 		return ev, "USD", formatMetricCurrency(ev, "USD"), nil
 	}
 
@@ -556,6 +581,15 @@ func getMetricFloat(metrics []fundamentals.SummaryMetric, name string, index int
 		}
 	}
 	return 0
+}
+
+func metricUnit(metrics []fundamentals.SummaryMetric, name string, index int) string {
+	for _, m := range metrics {
+		if m.Name == name && index < len(m.Values) && m.Values[index].Present {
+			return m.Values[index].Unit
+		}
+	}
+	return ""
 }
 
 func mapMetricAlias(alias string) (canonicalName string, isDerived bool, derivedType string) {

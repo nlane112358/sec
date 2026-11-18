@@ -13,10 +13,73 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
 const browserUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+var (
+	endpointMu      sync.RWMutex
+	yahooBaseURL    = "https://query1.finance.yahoo.com"
+	stooqBaseURL    = "https://stooq.com"
+	testTransport   http.RoundTripper
+)
+
+// SetMarketEndpointsForTesting overrides Yahoo/Stooq base URLs (for deterministic tests).
+func SetMarketEndpointsForTesting(yahooURL, stooqURL string) func() {
+	endpointMu.Lock()
+	prevYahoo, prevStooq := yahooBaseURL, stooqBaseURL
+	if strings.TrimSpace(yahooURL) != "" {
+		yahooBaseURL = strings.TrimRight(yahooURL, "/")
+	}
+	if strings.TrimSpace(stooqURL) != "" {
+		stooqBaseURL = strings.TrimRight(stooqURL, "/")
+	}
+	endpointMu.Unlock()
+	return func() {
+		endpointMu.Lock()
+		yahooBaseURL = prevYahoo
+		stooqBaseURL = prevStooq
+		endpointMu.Unlock()
+	}
+}
+
+// SetMarketTransportForTesting overrides the HTTP RoundTripper used by market & FX fetchers.
+func SetMarketTransportForTesting(rt http.RoundTripper) func() {
+	endpointMu.Lock()
+	prev := testTransport
+	testTransport = rt
+	endpointMu.Unlock()
+	return func() {
+		endpointMu.Lock()
+		testTransport = prev
+		endpointMu.Unlock()
+	}
+}
+
+func newMarketHTTPClient(timeout time.Duration) *http.Client {
+	endpointMu.RLock()
+	rt := testTransport
+	endpointMu.RUnlock()
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: rt,
+	}
+}
+
+func getYahooBaseURL() string {
+	endpointMu.RLock()
+	defer endpointMu.RUnlock()
+	return yahooBaseURL
+}
+
+func getStooqBaseURL() string {
+	endpointMu.RLock()
+	defer endpointMu.RUnlock()
+	return stooqBaseURL
+}
 
 // LoadValuationInputs reads ticker valuations from CSV, TSV, or JSON. CSV/TSV
 // files can use TICKER,PRICE or TICKER,MARKET_CAP headers; a legacy
@@ -273,7 +336,7 @@ func FetchLivePrices(ctx context.Context, tickers []string, logOut io.Writer) ma
 	if len(tickers) == 0 {
 		return out
 	}
-	httpClient := &http.Client{Timeout: 6 * time.Second}
+	httpClient := newMarketHTTPClient(6 * time.Second)
 	for _, rawTicker := range tickers {
 		ticker := strings.ToUpper(strings.TrimSpace(rawTicker))
 		if ticker == "" {
@@ -326,7 +389,7 @@ func FetchLiveQuote(ctx context.Context, ticker string) (LiveQuote, error) {
 	if ticker == "" {
 		return LiveQuote{}, fmt.Errorf("empty ticker")
 	}
-	httpClient := &http.Client{Timeout: 6 * time.Second}
+	httpClient := newMarketHTTPClient(6 * time.Second)
 	if quote, err := fetchYahooChartQuote(ctx, httpClient, ticker); err == nil && quote.Price > 0 {
 		return quote, nil
 	}
@@ -334,6 +397,85 @@ func FetchLiveQuote(ctx context.Context, ticker string) (LiveQuote, error) {
 		return LiveQuote{Price: price}, nil
 	}
 	return LiveQuote{}, fmt.Errorf("unable to fetch live quote for %s", ticker)
+}
+
+// FetchLiveQuotesBatch concurrently fetches live quotes with bounded workers and reports progress.
+func FetchLiveQuotesBatch(
+	ctx context.Context,
+	tickers []string,
+	workers int,
+	onProgress func(completed, total int, ticker string, q LiveQuote, err error),
+) map[string]LiveQuote {
+	out := make(map[string]LiveQuote)
+	if len(tickers) == 0 {
+		return out
+	}
+	if workers < 1 {
+		workers = 4
+	}
+	if workers > 8 {
+		workers = 8
+	}
+	unique := make([]string, 0, len(tickers))
+	seen := make(map[string]struct{}, len(tickers))
+	for _, raw := range tickers {
+		tk := strings.ToUpper(strings.TrimSpace(raw))
+		if tk == "" {
+			continue
+		}
+		if _, ok := seen[tk]; ok {
+			continue
+		}
+		seen[tk] = struct{}{}
+		unique = append(unique, tk)
+	}
+	if len(unique) == 0 {
+		return out
+	}
+
+	httpClient := newMarketHTTPClient(6 * time.Second)
+	jobs := make(chan string, len(unique))
+	for _, tk := range unique {
+		jobs <- tk
+	}
+	close(jobs)
+
+	var mu sync.Mutex
+	var completed atomic.Int64
+	total := len(unique)
+	workerCount := min(workers, total)
+	var wg sync.WaitGroup
+	wg.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer wg.Done()
+			for ticker := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+				var q LiveQuote
+				var err error
+				q, err = fetchYahooChartQuote(ctx, httpClient, ticker)
+				if err != nil || q.Price <= 0 {
+					if stooqPrice, stooqErr := fetchStooqPrice(ctx, httpClient, ticker); stooqErr == nil && stooqPrice > 0 {
+						q = LiveQuote{Price: stooqPrice}
+						err = nil
+					}
+				}
+				if err == nil && q.Price > 0 {
+					mu.Lock()
+					out[ticker] = q
+					mu.Unlock()
+				}
+				done := int(completed.Add(1))
+				if onProgress != nil {
+					onProgress(done, total, ticker, q, err)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	return out
 }
 
 func fetchYahooChartPrice(ctx context.Context, client *http.Client, ticker string) (float64, error) {
@@ -346,7 +488,7 @@ func fetchYahooChartPrice(ctx context.Context, client *http.Client, ticker strin
 
 func fetchYahooChartQuote(ctx context.Context, client *http.Client, ticker string) (LiveQuote, error) {
 	yahooSymbol := yahooSymbolForTicker(ticker)
-	endpoint := fmt.Sprintf("https://query1.finance.yahoo.com/v8/finance/chart/%s?interval=1d&range=5d", url.PathEscape(yahooSymbol))
+	endpoint := fmt.Sprintf("%s/v8/finance/chart/%s?interval=1d&range=5d", getYahooBaseURL(), url.PathEscape(yahooSymbol))
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return LiveQuote{}, err
@@ -411,7 +553,7 @@ func fetchStooqPrice(ctx context.Context, client *http.Client, ticker string) (f
 	} else if strings.HasSuffix(upper, ".DE") {
 		stooqSymbol = strings.ToLower(strings.TrimSuffix(upper, ".DE")) + ".de"
 	}
-	endpoint := "https://stooq.com/q/l/?s=" + url.QueryEscape(stooqSymbol) + "&f=sd2t2ohlcv&h&e=csv"
+	endpoint := getStooqBaseURL() + "/q/l/?s=" + url.QueryEscape(stooqSymbol) + "&f=sd2t2ohlcv&h&e=csv"
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return 0, err

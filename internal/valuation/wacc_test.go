@@ -1,6 +1,8 @@
 package valuation
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
 	"sec/internal/fundamentals"
@@ -28,5 +30,13 @@ func TestCalculateWACCWeightsAfterCash(t *testing.T) {
 	want := (400.0/480)*0.10 + (80.0/480)*0.06*(1-0.25)
 	if !closeEnough(result.Rate, want) {
 		t.Fatalf("WACC = %.12f, want %.12f", result.Rate, want)
+	}
+
+	var out bytes.Buffer
+	if err := WriteWACCResult(&out, "Test Corp", "TEST", result); err != nil {
+		t.Fatalf("WriteWACCResult failed: %v", err)
+	}
+	if !strings.Contains(out.String(), "WACC Estimate:") || !strings.Contains(out.String(), "Cost of Equity (Ke):") {
+		t.Fatalf("unexpected WACC output:\n%s", out.String())
 	}
 }

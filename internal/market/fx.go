@@ -89,13 +89,13 @@ func FetchLiveFXRate(ctx context.Context, currency string) (float64, error) {
 		return 1.0, nil
 	}
 	symbol := cur + "USD=X"
-	endpoint := fmt.Sprintf("https://query1.finance.yahoo.com/v8/finance/chart/%s?interval=1d&range=5d", url.PathEscape(symbol))
+	endpoint := fmt.Sprintf("%s/v8/finance/chart/%s?interval=1d&range=5d", getYahooBaseURL(), url.PathEscape(symbol))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return GetFXRateToUSD(cur), err
 	}
 	req.Header.Set("User-Agent", browserUserAgent)
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := newMarketHTTPClient(5 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return GetFXRateToUSD(cur), err

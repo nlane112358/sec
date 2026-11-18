@@ -2,8 +2,10 @@ package valuation
 
 import (
 	"fmt"
+	"io"
 	"math"
 	"strings"
+	"text/tabwriter"
 
 	"sec/internal/fundamentals"
 )
@@ -228,4 +230,30 @@ func summaryCurrency(summary fundamentals.FinancialSummary) string {
 		}
 	}
 	return ""
+}
+
+// WriteWACCResult prints a detailed breakdown of the Weighted Average Cost of Capital.
+func WriteWACCResult(output io.Writer, company, ticker string, wacc WACCResult) error {
+	if _, err := fmt.Fprintf(output, "%s (%s) — Weighted Average Cost of Capital (WACC)\n\n", company, ticker); err != nil {
+		return err
+	}
+	writer := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
+	afterTaxDebt := wacc.CostOfDebt * (1 - wacc.TaxRate)
+	rows := [][2]string{
+		{"WACC Estimate:", fmt.Sprintf("%.2f%%", wacc.Rate*100)},
+		{"Cost of Equity (Ke):", fmt.Sprintf("%.2f%% (Rf %.2f%% + Beta %.2f × ERP %.2f%%)", wacc.CostOfEquity*100, wacc.RiskFreeRate*100, wacc.Beta, wacc.EquityRiskPremium*100)},
+		{"Pre-Tax Cost of Debt (Kd):", fmt.Sprintf("%.2f%% (%s)", wacc.CostOfDebt*100, wacc.CostOfDebtSource)},
+		{"Effective Tax Rate:", fmt.Sprintf("%.2f%% (%s)", wacc.TaxRate*100, wacc.TaxSource)},
+		{"After-Tax Cost of Debt:", fmt.Sprintf("%.2f%%", afterTaxDebt*100)},
+		{"Equity Capital:", fmt.Sprintf("%s (%.1f%% weight · %s)", formatDCFMoney(wacc.EquityValue, wacc.Currency), wacc.EquityWeight*100, wacc.EquitySource)},
+		{"Gross Debt:", fmt.Sprintf("%s (%s)", formatDCFMoney(wacc.GrossDebt, wacc.Currency), wacc.DebtSource)},
+		{"Cash & Equivalents:", formatDCFMoney(wacc.Cash, wacc.Currency)},
+		{"Net Debt Capital:", fmt.Sprintf("%s (%.1f%% weight)", formatDCFMoney(wacc.Debt, wacc.Currency), wacc.DebtWeight*100)},
+	}
+	for _, r := range rows {
+		if _, err := fmt.Fprintf(writer, "  %s\t%s\n", r[0], r[1]); err != nil {
+			return err
+		}
+	}
+	return writer.Flush()
 }

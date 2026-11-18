@@ -202,3 +202,90 @@ VALUES (?, 'Beta Inc', 'BETA', 'us-gaap', 'Revenues', 'Revenue', 'USD', 12345678
 		t.Fatal("expected raw sql insert trigger to mark summary dirty and invalidate cache hit")
 	}
 }
+
+func TestQuoteFXCacheAndHydrationStatus(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+
+	now := time.Now().UTC()
+	old := now.Add(-48 * time.Hour)
+
+	if err := s.SaveQuotes(ctx, []QuoteRecord{
+		{Ticker: "AAPL", Price: 225.5, High52: 240, Low52: 170, Currency: "USD", Source: "live", FetchedAt: now},
+		{Ticker: "OLD", Price: 10.0, Currency: "USD", Source: "live", FetchedAt: old},
+	}); err != nil {
+		t.Fatalf("save quotes: %v", err)
+	}
+	q, ok, err := s.LoadQuote(ctx, "aapl")
+	if err != nil || !ok || q.Price != 225.5 {
+		t.Fatalf("load AAPL quote got (%+v, ok=%v, err=%v)", q, ok, err)
+	}
+	prunedQuotes, err := s.PruneQuotes(ctx, now.Add(-24*time.Hour))
+	if err != nil || prunedQuotes != 1 {
+		t.Fatalf("prune quotes got (%d, %v), want 1", prunedQuotes, err)
+	}
+	if _, ok, _ := s.LoadQuote(ctx, "OLD"); ok {
+		t.Fatal("expected OLD quote to be pruned")
+	}
+
+	if err := s.SaveFXRate(ctx, FXRateRecord{Currency: "EUR", RateToUSD: 1.09, Source: "live", FetchedAt: now}); err != nil {
+		t.Fatalf("save FX rate: %v", err)
+	}
+	if err := s.SaveFXRate(ctx, FXRateRecord{Currency: "JPY", RateToUSD: 0.0067, Source: "live", FetchedAt: old}); err != nil {
+		t.Fatalf("save old FX rate: %v", err)
+	}
+	fx, ok, err := s.LoadFXRate(ctx, "eur")
+	if err != nil || !ok || fx.RateToUSD != 1.09 {
+		t.Fatalf("load EUR FX got (%+v, ok=%v, err=%v)", fx, ok, err)
+	}
+	prunedFX, err := s.PruneFXRates(ctx, now.Add(-24*time.Hour))
+	if err != nil || prunedFX != 1 {
+		t.Fatalf("prune FX got (%d, %v), want 1", prunedFX, err)
+	}
+
+	// Empty shell company (0 facts) vs hydrated company (>0 facts)
+	if err := s.SaveCompany(ctx, "0000000010", "Empty Shell Corp", "EMPT", "7372", "Software"); err != nil {
+		t.Fatalf("save empty company: %v", err)
+	}
+	if err := s.SaveCompany(ctx, "0000000011", "Hydrated Corp", "HYDR", "3571", "Hardware"); err != nil {
+		t.Fatalf("save hydrated company: %v", err)
+	}
+	if err := s.SaveFacts(ctx, "HYDR", []FinancialFact{{
+		Company: "Hydrated Corp", CIK: "0000000011", Ticker: "HYDR",
+		Taxonomy: "us-gaap", Concept: "Revenues", Label: "Revenues", Unit: "USD",
+		Value: 1000, Start: "2025-01-01", End: "2025-12-31", FilingDate: "2026-02-01",
+		Form: "10-K", Accession: "0000000011-26-000001",
+	}}); err != nil {
+		t.Fatalf("save fact: %v", err)
+	}
+	if err := s.SaveFilings(ctx, []Filing{{
+		CIK: "0000000011", Accession: "0000000011-26-000002", Form: "10-Q",
+		FilingDate: "2026-10-25", ReportDate: "2026-09-30", PrimaryDocument: "q3.htm",
+	}}); err != nil {
+		t.Fatalf("save filing: %v", err)
+	}
+
+	stEmpt, err := s.CompanyHydrationStatus(ctx, "EMPT")
+	if err != nil || stEmpt.HasFacts {
+		t.Fatalf("expected EMPT HasFacts=false, got %+v err=%v", stEmpt, err)
+	}
+	stHydr, err := s.CompanyHydrationStatus(ctx, "HYDR")
+	if err != nil || !stHydr.HasFacts || stHydr.LatestForm != "10-Q" {
+		t.Fatalf("expected HYDR HasFacts=true LatestForm=10-Q, got %+v err=%v", stHydr, err)
+	}
+	batchStatus, err := s.CompanyHydrationStatuses(ctx, []string{"EMPT", "HYDR", "MISS"})
+	if err != nil {
+		t.Fatalf("batch hydration statuses: %v", err)
+	}
+	if batchStatus["EMPT"].HasFacts || !batchStatus["HYDR"].HasFacts || batchStatus["MISS"].CIK != "" {
+		t.Fatalf("unexpected batch hydration statuses: %+v", batchStatus)
+	}
+
+	prunedEmpty, err := s.PruneEmptyCompanies(ctx)
+	if err != nil || prunedEmpty != 1 {
+		t.Fatalf("prune empty companies got (%d, %v), want 1", prunedEmpty, err)
+	}
+	if err := s.Vacuum(ctx); err != nil {
+		t.Fatalf("vacuum: %v", err)
+	}
+}

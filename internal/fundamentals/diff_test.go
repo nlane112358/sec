@@ -1,7 +1,11 @@
 package fundamentals
 
 import (
+	"bytes"
+	"strings"
 	"testing"
+
+	"sec/internal/store"
 )
 
 func TestExtractItemFromHTML(t *testing.T) {
@@ -103,4 +107,41 @@ func findSub(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+func TestSelectDiffFilingsAndWriteFilingDiff(t *testing.T) {
+	filings := []store.Filing{
+		{CIK: "0000320193", Accession: "0000320193-26-000010", Form: "10-Q", FilingDate: "2026-08-01"},
+		{CIK: "0000320193", Accession: "0000320193-25-000099", Form: "10-K", FilingDate: "2025-11-01", ReportDate: "2025-09-27", PrimaryDocument: "aapl-2025.htm"},
+		{CIK: "0000320193", Accession: "0000320193-24-000088", Form: "10-K", FilingDate: "2024-11-01", ReportDate: "2024-09-28", PrimaryDocument: "aapl-2024.htm"},
+	}
+	curr, prior, avail, err := SelectDiffFilings(filings, "", "")
+	if err != nil {
+		t.Fatalf("SelectDiffFilings failed: %v", err)
+	}
+	if curr.Accession != "0000320193-25-000099" || prior.Accession != "0000320193-24-000088" || len(avail) != 2 {
+		t.Fatalf("unexpected filing selection: curr=%+v prior=%+v avail=%d", curr, prior, len(avail))
+	}
+
+	items, stats := ComputeDiff(
+		[]string{"The Company faces intense competition in global markets."},
+		[]string{"The Company faces intense AI competition in global markets."},
+	)
+	var out bytes.Buffer
+	err = WriteFilingDiff(&out, FilingDiffResult{
+		Ticker:        "AAPL",
+		Item:          "1A",
+		ItemTitle:     "Item 1A. Risk Factors",
+		CurrentFiling: avail[0],
+		PriorFiling:   avail[1],
+		Stats:         stats,
+		DiffItems:     items,
+	}, false, false)
+	if err != nil {
+		t.Fatalf("WriteFilingDiff failed: %v", err)
+	}
+	text := out.String()
+	if !strings.Contains(text, "Item 1A. Risk Factors Diff") || !strings.Contains(text, "{+AI+}") {
+		t.Fatalf("unexpected diff output:\n%s", text)
+	}
 }

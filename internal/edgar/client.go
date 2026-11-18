@@ -63,8 +63,11 @@ func (b *tokenBucket) Wait(ctx context.Context) error {
 }
 
 type Client struct {
-	http      *http.Client
-	userAgent string
+	http           *http.Client
+	userAgent      string
+	baseURL        string
+	tickerURL      string
+	archiveBaseURL string
 }
 
 type tickerEntry struct {
@@ -84,7 +87,54 @@ func NewClient(userAgent string) *Client {
 			Timeout: 20 * time.Second,
 		},
 		userAgent: userAgent,
+		baseURL:   secBase,
+		tickerURL: tickerURL,
 	}
+}
+
+// NewClientWithURLs constructs a Client targeting custom EDGAR endpoints (primarily for testing).
+func NewClientWithURLs(userAgent, dataBaseURL, companyTickersURL string, archiveBase ...string) *Client {
+	c := NewClient(userAgent)
+	if strings.TrimSpace(dataBaseURL) != "" {
+		c.baseURL = strings.TrimRight(dataBaseURL, "/")
+	}
+	if strings.TrimSpace(companyTickersURL) != "" {
+		c.tickerURL = companyTickersURL
+	}
+	if len(archiveBase) > 0 && strings.TrimSpace(archiveBase[0]) != "" {
+		c.archiveBaseURL = strings.TrimRight(archiveBase[0], "/")
+	}
+	return c
+}
+
+// ArchiveDocumentURL builds the full EDGAR archive URL for a filing's primary document.
+func (c *Client) ArchiveDocumentURL(numericCIK uint64, accessionDigits, escapedPrimaryDoc string) string {
+	base := "https://www.sec.gov/Archives/edgar/data"
+	if c != nil && strings.TrimSpace(c.archiveBaseURL) != "" {
+		base = strings.TrimRight(c.archiveBaseURL, "/")
+	}
+	return fmt.Sprintf("%s/%d/%s/%s", base, numericCIK, accessionDigits, escapedPrimaryDoc)
+}
+
+// SetTransport overrides the HTTP RoundTripper used by this client (for testing).
+func (c *Client) SetTransport(rt http.RoundTripper) {
+	if c != nil && c.http != nil && rt != nil {
+		c.http.Transport = rt
+	}
+}
+
+func (c *Client) apiBaseURL() string {
+	if strings.TrimSpace(c.baseURL) != "" {
+		return strings.TrimRight(c.baseURL, "/")
+	}
+	return secBase
+}
+
+func (c *Client) companyTickersURL() string {
+	if strings.TrimSpace(c.tickerURL) != "" {
+		return c.tickerURL
+	}
+	return tickerURL
 }
 
 func (c *Client) get(
@@ -290,31 +340,42 @@ func (c *Client) ResolveTicker(ctx context.Context, ticker string) (string, erro
 	return NormaliseCIK(match)
 }
 
+// WarmTickerCache ensures the SEC company_tickers.json mapping is cached before concurrent workers start.
+func (c *Client) WarmTickerCache(ctx context.Context) error {
+	_, err := c.companyTickerMapping(ctx)
+	return err
+}
+
 func (c *Client) companyTickerMapping(ctx context.Context) (map[string]tickerEntry, error) {
 	tickerMappingMu.Lock()
 	defer tickerMappingMu.Unlock()
 
+	targetURL := c.companyTickersURL()
+	useDiskCache := targetURL == tickerURL
+
 	cachePath := tickerCachePath()
 	var stale *tickerMapCache
-	if data, err := os.ReadFile(cachePath); err == nil {
-		var cached tickerMapCache
-		if json.Unmarshal(data, &cached) == nil && len(cached.Entries) > 0 {
-			age := time.Since(cached.FetchedAt)
-			if !cached.FetchedAt.IsZero() && age >= 0 && age < tickerCacheTTL {
-				return cached.Entries, nil
+	if useDiskCache {
+		if data, err := os.ReadFile(cachePath); err == nil {
+			var cached tickerMapCache
+			if json.Unmarshal(data, &cached) == nil && len(cached.Entries) > 0 {
+				age := time.Since(cached.FetchedAt)
+				if !cached.FetchedAt.IsZero() && age >= 0 && age < tickerCacheTTL {
+					return cached.Entries, nil
+				}
+				stale = &cached
 			}
-			stale = &cached
 		}
 	}
 
 	var entries map[string]tickerEntry
-	if err := c.get(ctx, tickerURL, &entries); err != nil {
+	if err := c.get(ctx, targetURL, &entries); err != nil {
 		if stale != nil {
 			return stale.Entries, nil
 		}
 		return nil, err
 	}
-	if len(entries) > 0 {
+	if useDiskCache && len(entries) > 0 {
 		_ = writeTickerCache(cachePath, tickerMapCache{
 			FetchedAt: time.Now().UTC(),
 			Entries:   entries,
@@ -362,7 +423,7 @@ func (c *Client) Facts(
 	ctx context.Context, cik string,
 ) (*CompanyFacts, error) {
 	var result CompanyFacts
-	url := secBase + "/api/xbrl/companyfacts/CIK" +
+	url := c.apiBaseURL() + "/api/xbrl/companyfacts/CIK" +
 		cik + ".json"
 
 	if err := c.get(ctx, url, &result); err != nil {
@@ -373,7 +434,8 @@ func (c *Client) Facts(
 
 func (c *Client) Submissions(ctx context.Context, cik string) (*CompanySubmissions, error) {
 	var result CompanySubmissions
-	url := secBase + "/submissions/CIK" + cik + ".json"
+	base := c.apiBaseURL()
+	url := base + "/submissions/CIK" + cik + ".json"
 	if err := c.get(ctx, url, &result); err != nil {
 		return nil, err
 	}
@@ -382,7 +444,7 @@ func (c *Client) Submissions(ctx context.Context, cik string) (*CompanySubmissio
 			return nil, fmt.Errorf("SEC returned invalid supplementary submissions filename %q", file.Name)
 		}
 		var history FilingHistory
-		if err := c.get(ctx, secBase+"/submissions/"+file.Name, &history); err != nil {
+		if err := c.get(ctx, base+"/submissions/"+file.Name, &history); err != nil {
 			return nil, fmt.Errorf("fetch supplementary submissions %s: %w", file.Name, err)
 		}
 		result.Filings.Supplemental = append(result.Filings.Supplemental, history)
