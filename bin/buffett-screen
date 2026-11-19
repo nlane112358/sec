@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Buffett-style small- to mid-cap compounder screen across the @all SEC universe.
+# Defaults: $300M–$10B market cap, sustained >=15% ROIC, strong owner earnings,
+# conservative debt, and fair valuation. Extra flags forward to `sec screen`.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SEC="${SEC_BIN:-$ROOT/sec}"
+if [[ ! -x "$SEC" ]]; then
+  SEC="$(command -v sec || true)"
+fi
+if [[ ! -x "$SEC" ]]; then
+  echo "sec binary not found; run 'make build' in $ROOT" >&2
+  exit 1
+fi
+
+export SEC_DATABASE_DIR="${SEC_DATABASE_DIR:-$ROOT/data}"
+export SEC_UNIVERSES_DIR="${SEC_UNIVERSES_DIR:-$ROOT/universes}"
+
+MIN_MCAP="${MIN_MCAP:-300M}"
+MAX_MCAP="${MAX_MCAP:-10B}"
+TOP="${TOP:-30}"
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  cat <<EOF
+Usage: $(basename "$0") [sec screen options...]
+
+Buffett-style small- to mid-cap screen across @all (default: ${MIN_MCAP}–${MAX_MCAP} market cap).
+Extra flags are forwarded to 'sec screen' (e.g. --offline, --top 50, --format csv,
+--sort ev_ebit --asc, --prices FILE, --refresh, or another @universe).
+
+Environment overrides:
+  MIN_MCAP=${MIN_MCAP}   MAX_MCAP=${MAX_MCAP}   TOP=${TOP}   UNIVERSE=@all
+EOF
+  exit 0
+fi
+
+# Fundamental predicates run first in SQLite; quotes load only for survivors.
+CRITERIA=(
+  'sector != "Financials"'                         # Exclude banks, insurers, REITs
+  'revenue >= 50M'                                 # Established operating scale
+  'roic >= 15%'                                    # High current return on capital
+  'coalesce(avg_adj_roic, gaap_roic) >= 15%'       # Sustained 5Y economic moat
+  'operating_margin >= 10%'                        # Pricing power & unit economics
+  'operating_consistency >= 80%'                   # Durable 5Y profitability (3Y+ net profit)
+  'owner_earnings > 0 && owner_margin >= 6%'       # Real cash flow after CapEx & SBC
+  'revenue_cagr >= 5%'                             # Steady 5Y business compounding
+  'share_reduction >= -5%'                         # Shareholder-friendly, low dilution
+  'coalesce(net_debt, debt) <= 3 * owner_earnings' # Fortress balance sheet (<=3Y payoff)
+  "market_cap >= ${MIN_MCAP}"                      # Small-cap floor
+  "market_cap <= ${MAX_MCAP}"                      # Mid-cap ceiling
+  'standard_owner_yield >= 5%'                     # Fair price: >=5% owner earnings yield
+  'standard_owner_yield <= 35% && pe >= 3'         # Guard split/share-count anomalies
+  'ev_ebit <= 15'                                  # Reasonable pre-tax enterprise multiple
+)
+
+WHERE="$(printf '%s && ' "${CRITERIA[@]}")"
+WHERE="${WHERE% && }"
+
+UNIVERSE_ARGS=(--universe "${UNIVERSE:-@all}")
+for arg in "$@"; do
+  if [[ "$arg" == @* || "$arg" == --universe || "$arg" == --universe=* ]]; then
+    UNIVERSE_ARGS=()
+    break
+  fi
+done
+
+exec "$SEC" screen \
+  ${UNIVERSE_ARGS[@]+"${UNIVERSE_ARGS[@]}"} \
+  --where "$WHERE" \
+  --sort "standard_owner_yield" \
+  --columns "market_cap,roic,operating_margin,owner_margin,revenue_cagr,standard_owner_yield,ev_ebit,pe,net_debt" \
+  --top "$TOP" \
+  "$@"
